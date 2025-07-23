@@ -1,0 +1,148 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "ML Pipeline Performance",
+    "tags": ["ml", "pipeline", "performance"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Model Training Jobs",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rabbitmq_queue_messages_ready{queue=\"model_training\"}",
+            "refId": "A",
+            "legendFormat": "Pending Training Jobs"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 0
+        },
+        "yAxes": [
+          {
+            "label": "Jobs",
+            "min": 0
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "title": "Prediction Jobs",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rabbitmq_queue_messages_ready{queue=\"predictions\"}",
+            "refId": "A",
+            "legendFormat": "Pending Predictions"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 0
+        },
+        "yAxes": [
+          {
+            "label": "Jobs",
+            "min": 0
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "title": "Anomaly Detection Jobs",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rabbitmq_queue_messages_ready{queue=\"anomaly_detection\"}",
+            "refId": "A",
+            "legendFormat": "Pending Anomaly Checks"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 8
+        },
+        "yAxes": [
+          {
+            "label": "Jobs",
+            "min": 0
+          }
+        ]
+      },
+      {
+        "id": 4,
+        "title": "Job Processing Rate",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(rabbitmq_queue_messages_delivered_total{queue=~\"model_training|predictions|anomaly_detection\"}[5m])",
+            "refId": "A",
+            "legendFormat": "{{queue}} - Jobs/sec"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 8
+        },
+        "yAxes": [
+          {
+            "label": "Jobs/sec",
+            "min": 0
+          }
+        ]
+      },
+      {
+        "id": 5,
+        "title": "Worker Health Status",
+        "type": "table",
+        "targets": [
+          {
+            "expr": "rabbitmq_queue_consumers",
+            "refId": "A",
+            "format": "table"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 24,
+          "x": 0,
+          "y": 16
+        },
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "excludeByName": {
+                "__name__": true,
+                "instance": true,
+                "job": true
+              },
+              "indexByName": {},
+              "renameByName": {
+                "queue": "Queue",
+                "Value": "Active Workers"
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "refresh": "30s",
+    "schemaVersion": 27,
+    "version": 1
+  }
+}

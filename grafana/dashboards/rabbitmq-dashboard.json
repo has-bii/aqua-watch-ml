@@ -1,0 +1,176 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "RabbitMQ Monitoring",
+    "tags": ["rabbitmq", "messaging", "queues"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Queue Messages",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rabbitmq_queue_messages_ready",
+            "refId": "A",
+            "legendFormat": "Ready - {{queue}}"
+          },
+          {
+            "expr": "rabbitmq_queue_messages_unacknowledged",
+            "refId": "B",
+            "legendFormat": "Unacknowledged - {{queue}}"
+          },
+          {
+            "expr": "rabbitmq_queue_messages",
+            "refId": "C",
+            "legendFormat": "Total - {{queue}}"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 0
+        },
+        "yAxes": [
+          {
+            "label": "Messages",
+            "min": 0
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "title": "Message Rates",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(rabbitmq_queue_messages_published_total[5m])",
+            "refId": "A",
+            "legendFormat": "Published/sec - {{queue}}"
+          },
+          {
+            "expr": "rate(rabbitmq_queue_messages_delivered_total[5m])",
+            "refId": "B",
+            "legendFormat": "Delivered/sec - {{queue}}"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 0
+        },
+        "yAxes": [
+          {
+            "label": "Messages/sec",
+            "min": 0
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "title": "Consumer Count",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "rabbitmq_queue_consumers",
+            "refId": "A"
+          }
+        ],
+        "gridPos": {
+          "h": 4,
+          "w": 6,
+          "x": 0,
+          "y": 8
+        },
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "steps": [
+                {
+                  "color": "red",
+                  "value": null
+                },
+                {
+                  "color": "yellow",
+                  "value": 1
+                },
+                {
+                  "color": "green",
+                  "value": 2
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 4,
+        "title": "Connection Count",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "rabbitmq_connections",
+            "refId": "A"
+          }
+        ],
+        "gridPos": {
+          "h": 4,
+          "w": 6,
+          "x": 6,
+          "y": 8
+        }
+      },
+      {
+        "id": 5,
+        "title": "Channel Count",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "rabbitmq_channels",
+            "refId": "A"
+          }
+        ],
+        "gridPos": {
+          "h": 4,
+          "w": 6,
+          "x": 12,
+          "y": 8
+        }
+      },
+      {
+        "id": 6,
+        "title": "Node Memory Usage",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "rabbitmq_node_mem_used / 1024 / 1024",
+            "refId": "A"
+          }
+        ],
+        "gridPos": {
+          "h": 4,
+          "w": 6,
+          "x": 18,
+          "y": 8
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "decbytes"
+          }
+        }
+      }
+    ],
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "refresh": "30s",
+    "schemaVersion": 27,
+    "version": 1
+  }
+}

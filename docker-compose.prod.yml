@@ -1,0 +1,67 @@
+# Production Docker Compose for Aqua Watch ML
+# Use this for production deployment with external services
+services:
+  # Main ML Application
+  aqua-watch-ml:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: aqua-watch-ml-prod
+    restart: unless-stopped
+    environment:
+      # Supabase Configuration (use secrets in production)
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_SERVICE_KEY: ${SUPABASE_SERVICE_KEY}
+      
+      # RabbitMQ Configuration (external service)
+      RABBITMQ_URL: ${RABBITMQ_URL}
+      
+      # Application Configuration
+      ENVIRONMENT: production
+      PYTHONUNBUFFERED: 1
+      
+    volumes:
+      # Persist model files
+      - ./models/saved_models:/app/models/saved_models
+      # Persist logs
+      - ./logs:/app/logs
+      # Persist cache data
+      - ./data/cache:/app/data/cache
+      
+    # Resource limits for production
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 8G
+        reservations:
+          cpus: '2.0'
+          memory: 4G
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 30s
+        max_attempts: 3
+        window: 120s
+    
+    # Logging configuration for production
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+    
+    # Health check to ensure the application is running
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; exit(0 if os.path.exists('/app/logs/aquarium_ml.log') else 1)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+    
+    # User namespace
+    user: "1000:1000"
