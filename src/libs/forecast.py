@@ -6,6 +6,9 @@ from datetime import datetime
 from typing import Dict
 from typing import Optional, Dict
 import math
+import logging
+
+logger = logging.getLogger(__name__)
 
 class WeatherForecast:
     def __init__(self):
@@ -89,7 +92,7 @@ class WeatherForecast:
             }
 
         except Exception as e:
-            print(f"Error fetching weather data: {e}")
+            logger.error(f"Error fetching weather data: {e}")
             return None
         
     def _process_5_minutely_data(self, response) -> pd.DataFrame:
