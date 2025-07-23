@@ -83,30 +83,29 @@ class MLWorker:
         """Handle anomaly detection tasks - runs every 30 minutes"""
         aquarium_id = task['aquarium_id']
         target_time = datetime.fromisoformat(task['target_time'])
-        parameter = ['water_temperature']
+        parameters = ['water_temperature', 'ph']
 
         try:    
             logger.info(f"Validating predictions for aquarium {aquarium_id} at {target_time.isoformat()}")
-            validated_count = 0
+            validated_params = []
             
-            for param in parameter:
+            for param in parameters:
                 is_success = self.ml_pipeline.validate_prediction(
                     aquarium_id=aquarium_id,
                     parameter=param, # type: ignore
                     target_time=target_time
                 )
-                validated_count += 1 if is_success else 0
+                validated_params.append(param) if is_success else None
 
             self.supabase.log_ml_activity(
                 aquarium_id=aquarium_id,
                 activity_type='validate_predictions',
                 status='completed',
                 metadata={
-                    'validated_count': validated_count,
+                    'validated_parameters': validated_params,
                     'target_time': target_time.isoformat()
                 }
             )
-
         except Exception as e:
             logger.error(f"Error in validate_predictions for aquarium {aquarium_id}: {e}")
             raise
@@ -200,60 +199,14 @@ class MLWorker:
     def handle_model_training(self, task: dict):
         """Handle model training tasks"""
         aquarium_id = task['aquarium_id']
-        parameters = task.get('parameters', ['water_temperature', 'ph', 'do'])
         tasked_at = task.get('tasked_at', datetime.now(timezone.utc))
         
         try:
-            # Fetch aquarium model settings
-            aquarium_settings = self.supabase.get_aquarium_model_settings(aquarium_id)
-
-            if not aquarium_settings:
-                raise ValueError("No model settings found for the aquarium.")
-
-            # Get days back for training
-            days_back = aquarium_settings['train_model_day_count']
-
-            if not days_back or days_back <= 0:
-                raise ValueError("Invalid train_model_day_count in aquarium settings.")
-
-            # Calculate start and end dates
-            start_date = (tasked_at - pd.Timedelta(days=days_back)).replace(minute=0, second=0, microsecond=0)
-            end_date = tasked_at
-
-            # Fetch historical data
-            historical_data = self.supabase.get_historical_data(aquarium_id, start_date=start_date, end_date=end_date)
-
-            # Reindex to 15-minute intervals
-            historical_data['created_at'] = pd.to_datetime(historical_data['created_at'], format='ISO8601')
-            historical_data.set_index('created_at', inplace=True)
-            historical_data.sort_index(inplace=True)
-
-            full_index = pd.date_range(start=historical_data.index.min(), end=historical_data.index.max(), freq='15min')
-            historical_data = historical_data.reindex(full_index)
-            for param in parameters:
-                if param in historical_data.columns:
-                    historical_data[param] = historical_data[param].interpolate(method='time').ffill().bfill()
-            historical_data.index.name = 'created_at'
-            historical_data.reset_index(inplace=True)
-
-            # Fetch water change data
-            water_change_data = self.supabase.get_water_changing_data(aquarium_id, start_date=start_date, end_date=end_date)
-
-            # Train water temperature model
-            result = self.ml_pipeline.train_water_temperature(
+            logger.info(f"Starting model training for aquarium {aquarium_id} at {tasked_at.isoformat()}")
+            self.ml_pipeline.train_models(
                 aquarium_id=aquarium_id,
-                historical_data=historical_data,
-                water_change_data=water_change_data,
-                days_back=int(days_back)
             )
-            
-            if not result['success']:
-                raise RuntimeError(f"Model training failed: {result.get('error', 'Unknown error')}")
-            
-            # Train ph model
-            # placeholder for ph model training
-
-            
+            logger.info(f"Model training completed for aquarium {aquarium_id}")
             
         except Exception as e:
             logger.error(f"Error in model training for aquarium {aquarium_id}: {e}")

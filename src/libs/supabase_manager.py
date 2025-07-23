@@ -1,6 +1,6 @@
 from supabase import create_client, Client
 from src.config.settings import settings
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import pandas as pd
 import logging
 from typing import Dict, Optional, Literal
@@ -44,6 +44,27 @@ class SupabaseManager:
             logger.error(f"Error fetching historical data: {e}")
             raise ValueError(f"Error fetching historical data: {e}")
 
+    def get_feeding_data(self,
+                         aquarium_id: str,
+                         start_date: Optional[datetime] = None,
+                         end_date: Optional[datetime] = None) -> pd.DataFrame:
+        try:
+            query = self.supabase.table("feeding_times").select("fed_at").eq("aquarium_id", aquarium_id).order(column="fed_at", desc=False)
+
+            if start_date:
+                query = query.gte("fed_at", start_date.isoformat())
+            if end_date:
+                query = query.lte("fed_at", end_date.isoformat())
+
+            response = query.execute()
+
+            temp_data = pd.DataFrame(response.data)
+
+            return temp_data
+        except Exception as e:
+            print(f"Error fetching feeding data: {e}")
+            raise ValueError(f"Error fetching feeding data: {e}")
+
     def get_water_changing_data(self, aquarium_id: str, start_date: datetime | None, end_date: datetime | None) -> pd.DataFrame:
         try:
             query = self.supabase.table("water_changing_times").select("changed_at, percentage_changed, water_temperature_added").eq("aquarium_id", aquarium_id).order(column="changed_at", desc=False)
@@ -83,9 +104,9 @@ class SupabaseManager:
             logger.error(f"Error fetching aquarium geo data: {e}")
             return None
         
-    def get_aquarium_model_settings(self, aquarium_id: str) -> Dict[str, float] | None:
+    def get_aquarium_model_settings(self, aquarium_id: str) -> Dict[str, int] | None:
         try:
-            response = self.supabase.table("aquarium_settings").select("train_model_day_count").eq("aquarium_id", aquarium_id).single().execute()
+            response = self.supabase.table("aquarium_settings").select("train_temp_model_days, train_ph_model_days").eq("aquarium_id", aquarium_id).single().execute()
 
             return response.data if response.data else None
         except Exception as e:

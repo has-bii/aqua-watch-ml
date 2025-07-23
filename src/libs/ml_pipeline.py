@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Literal
 import os
 from src.libs.supabase_manager import SupabaseManager
 from src.libs.features_engineering.water_temperature_features import FeatureEngineeringWaterTemperature
+from src.libs.features_engineering.ph_features import FeatureEngineeringPH
 from xgboost import XGBRegressor
 import xgboost as xgb
 import math
@@ -31,8 +32,16 @@ class MLPipeline:
         # Model storage - organized by aquarium_id and parameter
         self.supabase = SupabaseManager()
         self.features_water_temperature = FeatureEngineeringWaterTemperature()
+        self.features_ph = FeatureEngineeringPH()
         self.models: Dict[str, XGBRegressor] = {}
         self.metadata: Dict[str, Dict] = {}
+
+        # Data configuration
+        self.DATA_INTERVAL = '15min'  # Data interval for historical data
+        self.HISTORICAL_DATA_DAYS_BACK = 30  # Days back for historical data
+        self.PERIODS_IN_HOUR = 4
+        self.PERIODS_IN_DAY = 96  # 24 hours * 4 periods per hour
+        self.MIN_TRAINING_SAMPLES = self.PERIODS_IN_DAY * 3
 
         self.model_dir = settings.MODEL_SAVE_PATH
         
@@ -107,48 +116,26 @@ class MLPipeline:
             # Update the models dictionary
             self.models[model_key] = model
 
-            # Log the activity
-            self.supabase.log_ml_activity(
-                aquarium_id=aquarium_id,
-                activity_type="model_save",
-                status="success",
-                metadata={
-                    "parameter": parameter,
-                    "performance": performance,
-                    "training_info": training_info
-                }
-            )
-
         except Exception as e:
             logger.error(f"Error saving model for {aquarium_id} - {parameter}: {e}")
-            self.supabase.log_ml_activity(
-                aquarium_id=aquarium_id,
-                activity_type="error",
-                error_message=str(e),
-                metadata={
-                    "parameter": parameter,
-                    "performance": performance,
-                    "training_info": training_info
-                    }
-            )
             raise
 
     def validate_prediction(self,
                             aquarium_id: str,
                             parameter: Literal['water_temperature', 'ph', 'do'],
-                            target_time: datetime):
+                            target_time: datetime) -> bool:
         """
         Validate the prediction for a given aquarium and parameter at a specific time.
         """
         try:
             # Fetch the prediction from Supabase
-            predicted_water_temperature = self.supabase.get_prediction(aquarium_id, "water_temperature", target_time)
-            predicted_water_temperature['target_time'] = pd.to_datetime(predicted_water_temperature['target_time'], format='ISO8601')
-            predicted_water_temperature.set_index('target_time', inplace=True)
+            predicted = self.supabase.get_prediction(aquarium_id, parameter, target_time)
+            predicted['target_time'] = pd.to_datetime(predicted['target_time'], format='ISO8601')
+            predicted.set_index('target_time', inplace=True)
 
             # get start and end date for validation
-            start_date = predicted_water_temperature.index.min()
-            end_date = predicted_water_temperature.index.max()
+            start_date = predicted.index.min()
+            end_date = predicted.index.max()
 
             actual_historical_data = self.supabase.get_historical_data(aquarium_id=aquarium_id, start_date=start_date, end_date=end_date)
 
@@ -158,197 +145,179 @@ class MLPipeline:
             actual_historical_data['created_at'] = pd.to_datetime(actual_historical_data['created_at'], format='ISO8601')
             actual_historical_data.set_index('created_at', inplace=True)
 
-            for index, row in predicted_water_temperature.iterrows():
-                actual_value = actual_historical_data.loc[index, 'water_temperature'] if index in actual_historical_data.index else None # type: ignore
+            for index, row in predicted.iterrows():
+                actual_value = actual_historical_data.loc[index, parameter] if index in actual_historical_data.index else None # type: ignore
                 if actual_value is not None:
-                    predicted_water_temperature.at[index, 'actual_value'] = actual_value
+                    predicted.at[index, 'actual_value'] = actual_value
 
             # Drop where actual_value is null
-            predicted_water_temperature = predicted_water_temperature.dropna(subset=['actual_value'])
+            predicted = predicted.dropna(subset=['actual_value'])
 
             # Calculate prediction error
-            predicted_water_temperature['prediction_error'] = np.abs(predicted_water_temperature['predicted_value'] - predicted_water_temperature['actual_value']) 
+            predicted['prediction_error'] = np.abs(predicted['predicted_value'] - predicted['actual_value']) 
 
             # update created_at
             created_at = datetime.now(timezone.utc).isoformat()
-            predicted_water_temperature['created_at'] = created_at
+            predicted['created_at'] = created_at
 
             # Reset Index
-            predicted_water_temperature.reset_index(inplace=True, drop=False)
-            predicted_water_temperature['target_time'] = predicted_water_temperature['target_time'].apply(lambda x: x.isoformat())
+            predicted.reset_index(inplace=True, drop=False)
+            predicted['target_time'] = predicted['target_time'].apply(lambda x: x.isoformat())
 
             # Validate the prediction
             is_success = self.supabase.validate_prediction(
-                data=predicted_water_temperature.to_dict(orient='records') # type: ignore
+                data=predicted.to_dict(orient='records') # type: ignore
             )
 
             if is_success:
                 return True
             else:
-                raise ValueError("Failed to validate prediction")
+                raise ValueError("Failed to validate the prediction in Supabase")
 
         except Exception as e:
             logger.error(e)
             return False
 
+    def train_models(self, aquarium_id: str):
+        try:
+            # Fetch aquarium model settings
+            aquarium_settings = self.supabase.get_aquarium_model_settings(aquarium_id)
+
+            if not aquarium_settings:
+                raise ValueError("No model settings found for the aquarium.")
+
+            trained_models = []
+
+            for parameter in self.parameters:
+                if parameter == 'water_temperature':
+                    days_back = int(aquarium_settings['train_temp_model_days'])
+                    is_success = self.train_water_temperature(aquarium_id, days_back)
+                    trained_models.append(parameter) if is_success else None
+                elif parameter == 'ph':
+                    days_back = int(aquarium_settings['train_ph_model_days'])
+                    is_success = self.train_ph(aquarium_id, days_back)
+                    trained_models.append(parameter) if is_success else None
+                
+            if len(trained_models) == 0:
+                logger.warning(f"No models were trained for aquarium {aquarium_id}. Check the settings or data availability.")
+            else:
+                logger.info(f"Successfully trained models for aquarium {aquarium_id}: {', '.join(trained_models)}")
+        except Exception as e:
+            logger.error(f"Error during model training for aquarium {aquarium_id}: {e}")
+            raise
+
     def train_water_temperature(self, 
                                   aquarium_id: str, 
-                                  historical_data: pd.DataFrame,
-                                  water_change_data: pd.DataFrame,
                                   days_back: int,
-                                ) -> Dict:
+        ) -> bool:
         """
-        Train the water temperature prediction model.
+            Train the water temperature prediction model.
         """
         try:
-            start_time = datetime.now(timezone.utc)
+            start_date = (datetime.now(timezone.utc) - pd.Timedelta(days=days_back)).replace(minute=0, second=0, microsecond=0)
+            end_date = datetime.now(timezone.utc)
 
-            # Prepare features
-            df = self.features_water_temperature.prepare_all_features(
+            # Fetch historical data
+            historical_data = self.supabase.get_historical_data(
                 aquarium_id,
-                historical_data=historical_data[['created_at', 'water_temperature']].copy(),
-                water_change_data=water_change_data
+                start_date=start_date,
+                end_date=end_date
             )
 
-            # Split data into training and testing sets
-            train_size = int(len(df) * 0.8)
-            train, test = df[:train_size], df[train_size:]
+            historical_data = self.convert_from_5min_to_15min(
+                historical_data,
+                target_cols=['water_temperature', 'ph', 'do'],
+                index_name='created_at'
+            )
 
-            FEATURES = df.columns.tolist()
-            FEATURES.remove('water_temperature')  # Remove target variable from features
-            TARGET = 'water_temperature'
+            if len(historical_data) < self.MIN_TRAINING_SAMPLES:
+                raise ValueError(f"Not enough data to train the model. Minimum required samples: {self.MIN_TRAINING_SAMPLES}, available: {len(historical_data)}")
+            
+            # Fetch water change data
+            water_change_data = self.supabase.get_water_changing_data(
+                aquarium_id,
+                start_date=start_date,
+                end_date=end_date
+            )
 
-            X_train = train[FEATURES]
-            y_train = train[TARGET]
-
-            X_test = test[FEATURES]
-            y_test = test[TARGET]
+            df = self.features_water_temperature.prepare_all_features(
+            aquarium_id=aquarium_id,
+            historical_data=historical_data[['water_temperature', 'created_at']].copy(),
+            water_change_data=water_change_data,
+            )
 
             # Train the model
-            model = xgb.XGBRegressor(
-                n_estimators=1000,
-                early_stopping_rounds=50,
-                learning_rate=0.01,
-                max_depth=6,
-                random_state=42
-            )
-            model.fit(
-                X_train,
-                y_train,
-                eval_set=[(X_train, y_train), (X_test, y_test)],
-                verbose=100
-            )
-
-            y_pred_train = model.predict(X_train)
-            y_pred_test = model.predict(X_test)
-
-            # Evaluate the model
-            evaluation_metrics = {
-                "aquarium_id": aquarium_id,
-                "parameter": TARGET,
-                "days_back": days_back,
-                "train_mae": mean_absolute_error(y_train, y_pred_train),
-                "test_mae": mean_absolute_error(y_test, y_pred_test),
-                "train_rmse": np.sqrt(mean_squared_error(y_train, y_pred_train)),
-                "test_rmse": np.sqrt(mean_squared_error(y_test, y_pred_test)),
-                "train_r2": r2_score(y_train, y_pred_train),
-                "test_r2": r2_score(y_test, y_pred_test),
-                "train_samples": len(y_train),
-                "test_samples": len(y_test)
-            }
-
-            # Feature importance
-            feature_importance = pd.DataFrame(
-                data=model.feature_importances_,
-                index=model.feature_names_in_,
-                columns=['importance']
-            ).sort_values('importance', ascending=False)
-
-            # Retraining with 0.9 of the data with early stopping
-            split_idx = int(len(df) * 0.9)
-            X_train_split = df[FEATURES].iloc[:split_idx]
-            y_train_split = df[TARGET].iloc[:split_idx]
-            X_val_split = df[FEATURES].iloc[split_idx:]
-            y_val_split = df[TARGET].iloc[split_idx:]
-
-            final_model = xgb.XGBRegressor(
-                n_estimators=1000,
-                early_stopping_rounds=50,
-                learning_rate=0.01,
-                max_depth=6,
-                random_state=42
-            )
-            final_model.fit(
-                X_train_split,
-                y_train_split,
-                eval_set=[(X_train_split, y_train_split), (X_val_split, y_val_split)],
-                verbose=100
-            )
-
-            # Final evaluation metrics
-            final_y_pred_train = final_model.predict(X_train_split)
-            final_y_pred_test = final_model.predict(X_val_split)
-
-            final_evaluation_metrics = {
-                "aquarium_id": aquarium_id,
-                "parameter": TARGET,
-                "days_back": days_back,
-                "train_mae": mean_absolute_error(y_train_split, final_y_pred_train),
-                "test_mae": mean_absolute_error(y_val_split, final_y_pred_test),
-                "train_rmse": np.sqrt(mean_squared_error(y_train_split, final_y_pred_train)),
-                "test_rmse": np.sqrt(mean_squared_error(y_val_split, final_y_pred_test)),
-                "train_r2": r2_score(y_train_split, final_y_pred_train),
-                "test_r2": r2_score(y_val_split, final_y_pred_test),
-                "train_samples": len(y_train_split),
-                "test_samples": len(y_val_split)
-            }
-
-            # Feature importance for final model
-            final_feature_importance = pd.DataFrame(
-                data=final_model.feature_importances_,
-                index=final_model.feature_names_in_,
-                columns=['importance']
-            ).sort_values('importance', ascending=False)
-
-            # Compare evaluation metrics
-            if (final_evaluation_metrics['test_rmse'] < evaluation_metrics['test_rmse']):
-                logger.info("Final model has better performance than initial model.")
-                model = final_model
-                evaluation_metrics = final_evaluation_metrics
-                feature_importance = final_feature_importance
-                df['prediction'] = None
-                df.loc[X_val_split.index, 'prediction'] = final_y_pred_test
-            else:
-                logger.info("Initial model has better performance than final model. Using initial model.")
-                df['prediction'] = None
-                df.loc[X_test.index, 'prediction'] = y_pred_test
-
-            # Save the model and metadata
-            self._save_model(
+            self.train_model(
                 aquarium_id=aquarium_id,
-                parameter=TARGET,
-                model=model,
-                performance=evaluation_metrics,
-                training_info={
-                    "features": FEATURES,
-                    "feature_importance": feature_importance.to_dict(),
-                    "processing_time": (datetime.now(timezone.utc) - start_time).total_seconds(),
-                    "model_version": f"{TARGET}_{datetime.now(timezone.utc).isoformat()}"
-                }
+                parameter='water_temperature',
+                df=df,
+                remove_columns=['water_temperature', 'ph', 'do'],
+                days_back=days_back
             )
 
-            return {
-                "evaluation_metrics": evaluation_metrics,
-                "feature_importance": feature_importance,
-                "dataframe": df,
-                "success": True,
-            }
-
+            return True
         except Exception as e:
-            return {
-                "error": str(e),
-                "success": False
-            }
+            raise RuntimeError(f"Error during training water temperature model: {e}")
+
+    def train_ph(self,
+                 aquarium_id: str,
+                 days_back: int) -> bool:
+        """
+        Train the pH prediction model for the specified aquarium.
+        """
+        try:
+            start_date = (datetime.now(timezone.utc) - timedelta(days=days_back)).replace(minute=0, second=0, microsecond=0)
+            end_date = datetime.now(timezone.utc)
+
+            # Fetch historical data
+            historical_data =  self.supabase.get_historical_data(aquarium_id, start_date=start_date, end_date=end_date)
+
+            if historical_data.empty:
+                raise ValueError(f"No historical data found for aquarium {aquarium_id} in the last {days_back} days.")
+            
+            # Fetch water change data
+            historical_data = self.convert_from_5min_to_15min(
+                df=historical_data,
+                # target_col='ph',
+                index_name='created_at'
+            )
+
+            # Check if we have enough data
+            if len(historical_data) < self.MIN_TRAINING_SAMPLES:
+                raise ValueError(f"Not enough data to train the model. Minimum required samples: {self.MIN_TRAINING_SAMPLES}, available: {len(historical_data)}")
+            
+            # Fetch water change data
+            water_change_data = self.supabase.get_water_changing_data(
+                aquarium_id=aquarium_id,
+                start_date=start_date,
+                end_date=end_date
+            )
+
+            # Fetch feeding data
+            feeding_data = self.supabase.get_feeding_data(
+                aquarium_id=aquarium_id,
+                start_date=start_date,
+                end_date=end_date
+            )
+
+            # Prepare features
+            df = self.features_ph.prepare_all_features(
+                historical_data=historical_data,
+                water_change_data=water_change_data,
+                feed_data=feeding_data
+            )
+
+            self.train_model(
+                aquarium_id=aquarium_id,
+                parameter='ph',
+                df=df,
+                remove_columns=['ph', 'do'],
+                days_back=days_back
+            )
+
+            return True
+        except Exception as e:
+            raise Exception(f"Error during training pH model: {e}")
 
     def predict(self,
                 aquarium_id: str,
@@ -506,7 +475,8 @@ class MLPipeline:
             logger.error(f"Error predicting water temperature for aquarium {aquarium_id}: {e}")
             self.supabase.log_ml_activity(
                 aquarium_id=aquarium_id,
-                activity_type="error",
+                activity_type="predict_water_temperature",
+                status="error",
                 error_message=f"Error predicting water temperature: {e}",
                 metadata={"date_time_now": date_time_now.isoformat()}
             )
@@ -541,3 +511,209 @@ class MLPipeline:
             })
         
         return results
+
+    def convert_from_5min_to_15min(self, 
+                                   df: pd.DataFrame, 
+                                   target_cols: List[str] = ['water_temperature', 'ph', 'do'],
+                                   index_name: str = 'created_at') -> pd.DataFrame:
+        """
+        Convert a DataFrame with 5-minute intervals to 15-minute intervals.
+        """
+        is_reset_index = False
+
+        if not isinstance(df.index, pd.DatetimeIndex):
+            df[index_name] = pd.to_datetime(df[index_name], format='ISO8601')
+            df.set_index(index_name, inplace=True)
+            is_reset_index = True
+
+        # Resample to 15-minute intervals
+        full_index = pd.date_range(start=df.index.min(), end=df.index.max(), freq=self.DATA_INTERVAL)
+        df = df.reindex(full_index)
+        df.index.name = index_name
+        df.sort_index(inplace=True)
+
+        # Interpolate missing values for target columns
+        for col in target_cols:
+            if col in df.columns:
+                df[col] = df[col].interpolate(method='time').ffill().bfill()
+            else:
+                logger.warning(f"Column '{col}' not found in DataFrame. Skipping interpolation for this column.")
+
+        if is_reset_index:
+            df.reset_index(inplace=True)
+            
+        return df
+        
+    def train_model(self,
+                    aquarium_id: str,
+                    parameter: Literal['water_temperature', 'ph', 'do'],
+                    df: pd.DataFrame,
+                    remove_columns: List[str],
+                    days_back: int
+                    ):
+        """
+        Train a model for the specified parameter of the aquarium.
+        """
+        try:
+            start_time = datetime.now(timezone.utc)
+
+            # Split data into training and testing sets
+            train_size = int(len(df) * 0.8)
+            train, test = df[:train_size], df[train_size:]
+
+            FEATURES = df.columns.tolist()
+            for col in remove_columns:
+                FEATURES.remove(col) if col in FEATURES else None
+
+            TARGET = parameter
+
+            X_train = train[FEATURES]
+            y_train = train[TARGET]
+
+            X_test = test[FEATURES]
+            y_test = test[TARGET]
+
+            # Train the model
+            model = xgb.XGBRegressor(
+                n_estimators=1000,
+                early_stopping_rounds=50,
+                learning_rate=0.01,
+                max_depth=3,
+                random_state=42
+            )
+            model.fit(
+                X_train,
+                y_train,
+                eval_set=[(X_train, y_train), (X_test, y_test)],
+                verbose=False
+            )
+
+            y_pred_train = model.predict(X_train)
+            y_pred_test = model.predict(X_test)
+
+            # Evaluate the model
+            evaluation_metrics = {
+                "aquarium_id": aquarium_id,
+                "parameter": TARGET,
+                "train_model_days_count": days_back,
+                "train_mae": mean_absolute_error(y_train, y_pred_train),
+                "test_mae": mean_absolute_error(y_test, y_pred_test),
+                "train_rmse": np.sqrt(mean_squared_error(y_train, y_pred_train)),
+                "test_rmse": np.sqrt(mean_squared_error(y_test, y_pred_test)),
+                "train_r2": r2_score(y_train, y_pred_train),
+                "test_r2": r2_score(y_test, y_pred_test),
+                "train_samples": len(y_train),
+                "test_samples": len(y_test)
+            }
+
+            # Feature importance
+            feature_importance = pd.DataFrame(
+                data=model.feature_importances_,
+                index=model.feature_names_in_,
+                columns=['importance']
+            ).sort_values('importance', ascending=False)
+
+            # Retraining with 0.9 of the data with early stopping
+            split_idx = int(len(df) * 0.9)
+            X_train_split = df[FEATURES].iloc[:split_idx]
+            y_train_split = df[TARGET].iloc[:split_idx]
+            X_val_split = df[FEATURES].iloc[split_idx:]
+            y_val_split = df[TARGET].iloc[split_idx:]
+
+            final_model = xgb.XGBRegressor(
+                n_estimators=1000,
+                early_stopping_rounds=50,
+                learning_rate=0.01,
+                max_depth=3,
+                random_state=42
+            )
+            final_model.fit(
+                X_train_split,
+                y_train_split,
+                eval_set=[(X_train_split, y_train_split), (X_val_split, y_val_split)],
+                verbose=False
+            )
+
+            # Final evaluation metrics
+            final_y_pred_train = final_model.predict(X_train_split)
+            final_y_pred_test = final_model.predict(X_val_split)
+
+            final_evaluation_metrics = {
+                "aquarium_id": aquarium_id,
+                "parameter": TARGET,
+                "days_back": days_back,
+                "train_mae": mean_absolute_error(y_train_split, final_y_pred_train),
+                "test_mae": mean_absolute_error(y_val_split, final_y_pred_test),
+                "train_rmse": np.sqrt(mean_squared_error(y_train_split, final_y_pred_train)),
+                "test_rmse": np.sqrt(mean_squared_error(y_val_split, final_y_pred_test)),
+                "train_r2": r2_score(y_train_split, final_y_pred_train),
+                "test_r2": r2_score(y_val_split, final_y_pred_test),
+                "train_samples": len(y_train_split),
+                "test_samples": len(y_val_split)
+            }
+
+            # Feature importance for final model
+            final_feature_importance = pd.DataFrame(
+                data=final_model.feature_importances_,
+                index=final_model.feature_names_in_,
+                columns=['importance']
+            ).sort_values('importance', ascending=False)
+
+            init_model_diff_rmse = evaluation_metrics['train_rmse'] - evaluation_metrics['test_rmse']
+            final_model_diff_rmse = final_evaluation_metrics['train_rmse'] - final_evaluation_metrics['test_rmse']
+
+            # Compare evaluation metrics
+            if (final_model_diff_rmse < init_model_diff_rmse):
+                logger.info("Final model has better performance than initial model. Using final model.")
+                model = final_model
+                evaluation_metrics = final_evaluation_metrics
+                feature_importance = final_feature_importance
+                df['prediction'] = None
+                df.loc[X_val_split.index, 'prediction'] = final_y_pred_test
+            else:
+                logger.info("Initial model has better performance than final model. Using initial model.")
+                df['prediction'] = None
+                df.loc[X_test.index, 'prediction'] = y_pred_test
+
+            # Save the model and metadata
+            self._save_model(
+                aquarium_id=aquarium_id,
+                parameter=TARGET,
+                model=model,
+                performance=evaluation_metrics,
+                training_info={
+                    "features": FEATURES,
+                    "feature_importance": feature_importance.to_dict(),
+                    "processing_time": (datetime.now(timezone.utc) - start_time).total_seconds(),
+                    "model_version": f"{TARGET}_{datetime.now(timezone.utc).isoformat()}"
+                }
+            )
+
+            try:
+                # Insert the training data into Supabase
+                self.supabase.log_ml_activity(
+                aquarium_id=aquarium_id,
+                activity_type="model_training",
+                status="success",
+                processing_time_seconds=int((datetime.now(timezone.utc) - start_time).total_seconds()),
+                metadata={
+                    "parameter": TARGET,
+                    "evaluation_metrics": evaluation_metrics,
+                    "feature_importance": feature_importance.to_dict(),
+                    "training_info": {
+                        "features": FEATURES,
+                        "model_version": f"{TARGET}_{datetime.now(timezone.utc).isoformat()}"
+                    }
+                })
+            except Exception as e:
+                print(f"Error inserting training data into Supabase: {e}")
+        except Exception as e:
+            print(f"Error in train_model: {e}")
+            self.supabase.log_ml_activity(
+                aquarium_id=aquarium_id,
+                activity_type="model_training",
+                status="error",
+                error_message=str(e),
+                metadata={"parameter": parameter}
+            )
+            raise
