@@ -114,7 +114,7 @@ class TaskScheduler:
                 }
                 self.rabbitmq.publish_task('predictions', task_data)
             
-            logger.info(f"Scheduled predictions for {len(aquariums)} aquariums (30-min interval)")
+            logger.info(f"Scheduled predictions for {len(aquariums)} aquariums at {datetime.now(timezone.utc).isoformat()}")
             
         except Exception as e:
             logger.error(f"Error scheduling predictions: {e}")

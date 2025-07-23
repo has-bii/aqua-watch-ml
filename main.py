@@ -29,10 +29,10 @@ def create_directories():
 def start_workers():
     """Start ML workers"""
     workers = [
-        ('anomaly_detection', 2),    # Reduced to 2 workers (30-min intervals)
-        ('predictions', 2),          # 2 workers for predictions
-        ('validate_predictions', 1),          # 2 workers for validation
-        ('model_training', 1)        # 1 worker for training
+        ('anomaly_detection', 2),
+        ('predictions', 2),
+        ('validate_predictions', 1),
+        ('model_training', 1)
     ]
     
     worker_threads = []
@@ -47,7 +47,6 @@ def start_workers():
                     worker_instance.start_consuming(queue)
                 except Exception as e:
                     logger.error(f"Worker {worker_instance.worker_id} failed: {e}")
-                    # Worker will restart automatically in production
             
             thread = threading.Thread(
                 target=start_worker,
