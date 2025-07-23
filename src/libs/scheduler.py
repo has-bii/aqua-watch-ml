@@ -5,7 +5,7 @@ import schedule
 from src.libs.rabbitmq_manager import RabbitMQManager
 from src.libs.supabase_manager import SupabaseManager
 from src.config.settings import settings
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -23,21 +23,24 @@ class TaskScheduler:
             
             # schedule.every(30).minutes.do(self.schedule_predictions)              # Every 30 minutes
             # schedule.every(30).minutes.do(self.schedule_model_training)     # Daily training
-            # # schedule.every().day.at("00:00").do(self.schedule_model_training)     # Daily training
+            
             
             # Run anomaly detection at minute 25 and minute 55 of every hour
-            schedule.every().hour.at(":25").do(self.schedule_anomaly_detection)
-            schedule.every().hour.at(":55").do(self.schedule_anomaly_detection)
-
-            # Run model training at 00:00 every day
-            schedule.every().day.at("00:00").do(self.schedule_model_training)
+            # schedule.every().hour.at(":25").do(self.schedule_anomaly_detection)
+            # schedule.every().hour.at(":55").do(self.schedule_anomaly_detection)
 
             # Run predictions at minute 25 and minute 55 of every hour
             schedule.every().hour.at(":25").do(self.schedule_predictions)
             schedule.every().hour.at(":55").do(self.schedule_predictions)
 
-            # self.schedule_predictions()         # Initial run
-            # self.schedule_model_training()      # Initial run
+            # Run validate predictions at minute 00, 15, 30, and 45 of every hour
+            schedule.every().hour.at(":00").do(self.schedule_predict_validation)
+            schedule.every().hour.at(":15").do(self.schedule_predict_validation)
+            schedule.every().hour.at(":30").do(self.schedule_predict_validation)
+            schedule.every().hour.at(":45").do(self.schedule_predict_validation)
+
+            # Run model training at 00:00 every day
+            schedule.every().day.at("00:00").do(self.schedule_model_training)
 
             def run_scheduler():
                 while self.running:
@@ -55,6 +58,27 @@ class TaskScheduler:
             logger.error(f"Failed to start scheduler: {e}")
             raise
 
+    def schedule_predict_validation(self):
+        """Schedule prediction validation every 30 minutes"""
+        try:
+            aquariums = self.supabase.get_active_aquariums()
+
+            target_time = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+            
+            for aquarium in aquariums:
+                task_data = {
+                    'task_type': 'validate_predictions',
+                    'aquarium_id': aquarium['id'],
+                    'user_id': aquarium['user_id'],
+                    'priority': 50,
+                    'target_time': target_time.isoformat(),
+                }
+                self.rabbitmq.publish_task('validate_predictions', task_data)
+            
+            logger.info(f"Scheduled prediction validation for {len(aquariums)} aquariums")
+            
+        except Exception as e:
+            logger.error(f"Error scheduling prediction validation: {e}")
 
     def schedule_anomaly_detection(self):
         """Schedule anomaly detection every 30 minutes"""
@@ -76,7 +100,6 @@ class TaskScheduler:
             logger.error(f"Error scheduling anomaly detection: {e}")
 
     def schedule_predictions(self):
-        """Schedule predictions every 30 minutes"""
         try:
             aquariums = self.supabase.get_active_aquariums()
             
@@ -85,9 +108,9 @@ class TaskScheduler:
                     'task_type': 'predictions',
                     'aquarium_id': aquarium['id'],
                     'user_id': aquarium['user_id'],
-                    'parameters': ['ph', 'do', 'water_temperature'],
-                    'interval_minutes': 30,  # Fixed to 30 minutes
-                    'priority': 150
+                    'interval_minutes': 30,
+                    'priority': 150,
+                    'date_time_now': datetime.now(timezone.utc).isoformat()
                 }
                 self.rabbitmq.publish_task('predictions', task_data)
             

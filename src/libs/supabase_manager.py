@@ -23,7 +23,7 @@ class SupabaseManager:
             logger.error(f"Error fetching active aquariums: {e}")
             return []
 
-    def get_historical_data(self, aquarium_id: str, start_date: datetime | None, end_date: datetime | None) -> pd.DataFrame:
+    def get_historical_data(self, aquarium_id: str, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None, target_time: Optional[datetime] = None) -> pd.DataFrame:
         try:
             query = self.supabase.table("measurements").select("created_at, water_temperature, ph, do").eq("env_id", aquarium_id).order(column="created_at", desc=False)
 
@@ -31,6 +31,8 @@ class SupabaseManager:
                 query = query.gte("created_at", start_date.isoformat())
             if end_date:
                 query = query.lte("created_at", end_date.isoformat())
+            if target_time:
+                query = query.eq("created_at", target_time.isoformat())
 
             response = query.execute()
 
@@ -174,7 +176,7 @@ class SupabaseManager:
         
     def get_prediction(self,
                        aquarium_id: str,
-                       parameter: Literal['water_temperature', 'ph'],
+                       parameter: Literal['water_temperature', 'ph', 'do'],
                        target_time: datetime) -> Optional[Dict]:
         """
         Get a specific prediction for an aquarium and parameter at a given time
@@ -194,5 +196,49 @@ class SupabaseManager:
             else:
                 return None
         except Exception as e:
-            logger.error(f"Error fetching prediction: {e}")
+            print(f"Error fetching prediction: {e}")
+            # logger.error(f"Error fetching prediction: {e}")
             return None
+        
+    def validate_prediction(self,
+                            aquarium_id: str,
+                            prediction_id: int,
+                            actual_value: float,
+                            prediction_error: float) -> bool:
+        """
+        Validate a prediction against an actual value
+        Args:
+            aquarium_id: UUID of the aquarium
+            prediction_id: ID of the prediction to validate
+            actual_value: Actual value to compare against the prediction
+            prediction_error: Allowed error margin for the prediction
+        Returns:
+            True if the prediction is valid, False otherwise
+        """
+        try:
+            response = self.supabase.table("predictions").update({
+                "actual_value": actual_value,
+                "prediction_error": prediction_error
+            }).eq("id", prediction_id).execute()
+
+            status = "success"
+
+            print(f"Prediction validation response: {response}")
+            self.log_ml_activity(
+                aquarium_id=aquarium_id,
+                activity_type="prediction_validation",
+                status=status,
+                metadata={
+                    "prediction_id": prediction_id,
+                    "actual_value": actual_value,
+                    "prediction_error": prediction_error
+                }
+            )
+        
+            return True
+        except Exception as e:
+            print(f"Error validating prediction: {e}")
+            # logger.error(f"Error validating prediction: {e}")
+            return False
+        
+    

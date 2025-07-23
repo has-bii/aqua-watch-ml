@@ -44,7 +44,8 @@ class RabbitMQManager:
         queues = {
             'anomaly_detection': {'priority': 200, 'ttl': 1800000},     # 30 minutes TTL
             'predictions': {'priority': 150, 'ttl': 1800000},          # 30 minutes TTL
-            'model_training': {'priority': 100, 'ttl': 3600000}        # 1 hour TTL
+            'model_training': {'priority': 100, 'ttl': 3600000},        # 1 hour TTL
+            'validate_predictions': {'priority': 50, 'ttl': 3600000}  # 1 hour TTL
         }
 
         for queue_name, config in queues.items():
@@ -146,7 +147,7 @@ class RabbitMQManager:
     
     def get_all_queue_stats(self) -> Dict:
         """Get stats for all queues - REMOVED critical_monitoring"""
-        queues = ['anomaly_detection', 'predictions', 'model_training']  # Removed critical_monitoring
+        queues = ['anomaly_detection', 'predictions', 'model_training', 'validate_predictions']  # Removed critical_monitoring
         stats = {}
         
         for queue_name in queues:

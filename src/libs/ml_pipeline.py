@@ -133,6 +133,59 @@ class MLPipeline:
             )
             raise
 
+    def validate_prediction(self,
+                            aquarium_id: str,
+                            parameter: Literal['water_temperature', 'ph', 'do'],
+                            target_time: datetime):
+        """
+        Validate the prediction for a given aquarium and parameter at a specific time.
+        """
+        try:
+            # Fetch the prediction
+            predicted_data = self.supabase.get_prediction(
+                aquarium_id=aquarium_id,
+                parameter=parameter,
+                target_time=target_time
+            )
+
+            if predicted_data is None:
+                raise ValueError("No prediction found")
+            
+            prediction_id = predicted_data['id']
+            predicted_value = predicted_data['predicted_value']
+
+            # Fetch the actual historical data
+            actual_historical_data = self.supabase.get_historical_data(
+                aquarium_id=aquarium_id,
+                target_time=target_time
+            )
+
+            if actual_historical_data.empty:
+                raise ValueError("No historical data found for validation")
+            
+            actual_value = actual_historical_data[parameter].iloc[0]
+            actual_value = float(actual_value)
+
+            # Calculate the absolute error
+            absolute_error = abs(predicted_value - actual_value)
+
+            # Validate the prediction
+            is_success = self.supabase.validate_prediction(
+                aquarium_id=aquarium_id,
+                prediction_id=prediction_id,
+                actual_value=actual_value,
+                prediction_error=absolute_error
+            )
+
+            if is_success:
+                return True
+            else:
+                raise ValueError("Failed to validate prediction")
+
+        except Exception as e:
+            logger.error(f"Error validating prediction for {aquarium_id} - {parameter} at {target_time}: {e}")
+            return False
+
     def train_water_temperature(self, 
                                   aquarium_id: str, 
                                   historical_data: pd.DataFrame,

@@ -4,6 +4,7 @@ from src.libs.supabase_manager import SupabaseManager
 from src.libs.rabbitmq_manager import RabbitMQManager
 from src.libs.ml_pipeline import MLPipeline
 import pandas as pd
+from typing import Literal
 import logging
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,8 @@ class MLWorker:
                     self.handle_predictions(task)
                 elif queue_name == 'model_training':
                     self.handle_model_training(task)
+                elif queue_name == 'validate_predictions':
+                    self.handle_validate_predictions(task)
                 else:
                     logger.warning(f"Unknown queue type: {queue_name}")
                 
@@ -75,6 +78,38 @@ class MLWorker:
         
         logger.info(f"Worker {self.worker_id} started consuming from {queue_name}")
         self.rabbitmq.channel.start_consuming()
+
+    def handle_validate_predictions(self, task: dict):
+        """Handle anomaly detection tasks - runs every 30 minutes"""
+        aquarium_id = task['aquarium_id']
+        target_time = datetime.fromisoformat(task['target_time'])
+        parameter = ['water_temperature']
+
+        try:    
+            logger.info(f"Validating predictions for aquarium {aquarium_id} at {target_time.isoformat()}")
+            validated_count = 0
+            
+            for param in parameter:
+                is_success = self.ml_pipeline.validate_prediction(
+                    aquarium_id=aquarium_id,
+                    parameter=param, # type: ignore
+                    target_time=target_time
+                )
+                validated_count += 1 if is_success else 0
+
+            self.supabase.log_ml_activity(
+                aquarium_id=aquarium_id,
+                activity_type='validate_predictions',
+                status='completed',
+                metadata={
+                    'validated_count': validated_count,
+                    'target_time': target_time.isoformat()
+                }
+            )
+
+        except Exception as e:
+            logger.error(f"Error in validate_predictions for aquarium {aquarium_id}: {e}")
+            raise
     
     def handle_anomaly_detection(self, task: dict):
         """Handle anomaly detection tasks - runs every 30 minutes"""
@@ -148,7 +183,7 @@ class MLWorker:
     def handle_predictions(self, task: dict):
         """Handle prediction tasks"""
         aquarium_id = task['aquarium_id']
-        date_time_now: datetime = task.get('date_time_now', datetime.now(timezone.utc))
+        date_time_now = datetime.fromisoformat(task['date_time_now'])
         
         try:
             self.ml_pipeline.predict(
@@ -157,11 +192,6 @@ class MLWorker:
             )
 
             logger.info(f"Prediction task completed for aquarium {aquarium_id}")
-            self.supabase.log_ml_activity(
-                aquarium_id=aquarium_id,
-                activity_type='predictions',
-                status='completed',
-            )
             
         except Exception as e:
             logger.error(f"Error in predictions for aquarium {aquarium_id}: {e}")

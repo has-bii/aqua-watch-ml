@@ -31,6 +31,7 @@ def start_workers():
     workers = [
         ('anomaly_detection', 2),    # Reduced to 2 workers (30-min intervals)
         ('predictions', 2),          # 2 workers for predictions
+        ('validate_predictions', 1),          # 2 workers for validation
         ('model_training', 1)        # 1 worker for training
     ]
     
