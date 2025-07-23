@@ -75,8 +75,28 @@ class RabbitMQManager:
         """
 
         try:
+            attempted = 0
+            max_attempts = 3
+
             if not self.channel:
                 raise Exception("Channel is not initialized. Call connect() first.")
+
+            # Check channel health
+            if self.channel.is_closed:
+                logger.info("Channel is closed, creating a new connection.")
+                while attempted < max_attempts:
+                    try:
+                        status = self.connect()
+                        if status:
+                            logger.info("Reconnected to RabbitMQ successfully.")
+                            break
+                        attempted += 1
+                    except Exception as e:
+                        logger.error(f"Attempt {attempted + 1} failed: {e}")
+                        attempted += 1
+
+            if attempted == max_attempts:
+                raise Exception("Failed to reconnect to RabbitMQ after multiple attempts.")
 
             task = {
                 'task_id': str(uuid.uuid4()),
