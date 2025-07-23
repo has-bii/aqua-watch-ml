@@ -31,7 +31,7 @@ COPY . .
 COPY ./.env* ./
 
 # Create necessary directories
-RUN mkdir -p models/saved_models logs data/cache
+# RUN mkdir -p models/saved_models logs data/cache
 
 # Create non-root user for security
 RUN groupadd -r appuser && useradd -r -g appuser appuser
