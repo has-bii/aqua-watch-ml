@@ -18,6 +18,11 @@ services:
       
       # RabbitMQ Configuration (external service)
       RABBITMQ_URL: ${RABBITMQ_URL}
+      RABBITMQ_HOST: ${RABBITMQ_HOST}
+      RABBITMQ_PORT: ${RABBITMQ_PORT}
+      RABBITMQ_VHOST: ${RABBITMQ_VHOST}
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       
       # Application Configuration
       ENVIRONMENT: production
