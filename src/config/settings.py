@@ -7,12 +7,19 @@ from pathlib import Path
 load_dotenv()
 
 class Settings:
+    ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
+
     # Supabase configuration
     SUPABASE_URL: str = os.getenv("SUPABASE_URL") # type: ignore
     SUPABASE_SERVICE_KEY: str = os.getenv("SUPABASE_SERVICE_KEY") # type: ignore
 
     # RabbitMQ configuration
     RABBITMQ_URL: str = os.getenv("RABBITMQ_URL") # type: ignore
+    RABBITMQ_HOST: str = os.getenv("RABBITMQ_HOST", "localhost") # type: ignore
+    RABBITMQ_PORT: int = int(os.getenv("RABBITMQ_PORT", 5672)) # type: ignore
+    RABBITMQ_VHOST: str = os.getenv("RABBITMQ_VHOST", "/") # type: ignore
+    RABBITMQ_USER: str = os.getenv("RABBITMQ_USER", "guest") # type: ignore
+    RABBITMQ_PASSWORD: str = os.getenv("RABBITMQ_PASSWORD", "guest") # type: ignore
 
     # ML Settings
     ML_MODEL_RETRAIN_INTERVAL = 24  # hours

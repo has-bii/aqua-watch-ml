@@ -177,7 +177,7 @@ class SupabaseManager:
     def get_prediction(self,
                        aquarium_id: str,
                        parameter: Literal['water_temperature', 'ph', 'do'],
-                       target_time: datetime) -> Optional[Dict]:
+                       target_time: datetime) -> pd.DataFrame:
         """
         Get a specific prediction for an aquarium and parameter at a given time
         Args:
@@ -185,60 +185,44 @@ class SupabaseManager:
             parameter: Target parameter (e.g., water_temperature)
             target_time: Time of the prediction
         Returns:
-            Dictionary with prediction data or None if not found
+            DataFrame containing the prediction data, or an empty DataFrame if no prediction is found
         """
 
         try:
-            response = self.supabase.table("predictions").select("*").eq("aquarium_id", aquarium_id).eq("target_parameter", parameter).eq("target_time", target_time.isoformat()).single().execute()
+            # Fetch that actual_value is null
+            response = self.supabase.table("predictions").select("*").eq("aquarium_id", aquarium_id).eq("target_parameter", parameter).lte("target_time", target_time.isoformat()).order("target_time", desc=True).execute()
 
-            if response.data:
-                return response.data
-            else:
-                return None
+            df = pd.DataFrame(response.data)
+
+            if df.empty:
+                raise ValueError("No prediction found")
+            
+            df = df[df['actual_value'].isnull()]
+
+            if df.empty:
+                raise ValueError("No prediction found with actual_value as null")
+            
+            return df
         except Exception as e:
-            print(f"Error fetching prediction: {e}")
-            # logger.error(f"Error fetching prediction: {e}")
-            return None
+            raise ValueError(f"Failed to fetch prediction: {e}")
         
     def validate_prediction(self,
-                            aquarium_id: str,
-                            prediction_id: int,
-                            actual_value: float,
-                            prediction_error: float) -> bool:
+                            data: Dict) -> bool:
         """
         Validate a prediction against an actual value
         Args:
-            aquarium_id: UUID of the aquarium
-            prediction_id: ID of the prediction to validate
-            actual_value: Actual value to compare against the prediction
-            prediction_error: Allowed error margin for the prediction
+            data: Dictionary containing the prediction data to validate
+                Expected keys: 'id', 'aquarium_id', 'target_parameter', 'target_time', 'predicted_value', 'actual_value', 'confidence_lower', 'confidence_upper', 'std_error'
         Returns:
             True if the prediction is valid, False otherwise
         """
         try:
-            response = self.supabase.table("predictions").update({
-                "actual_value": actual_value,
-                "prediction_error": prediction_error
-            }).eq("id", prediction_id).execute()
+            self.supabase.table("predictions").upsert(
+                data
+            ).execute()
 
-            status = "success"
-
-            print(f"Prediction validation response: {response}")
-            self.log_ml_activity(
-                aquarium_id=aquarium_id,
-                activity_type="prediction_validation",
-                status=status,
-                metadata={
-                    "prediction_id": prediction_id,
-                    "actual_value": actual_value,
-                    "prediction_error": prediction_error
-                }
-            )
-        
             return True
         except Exception as e:
-            print(f"Error validating prediction: {e}")
-            # logger.error(f"Error validating prediction: {e}")
             return False
         
     

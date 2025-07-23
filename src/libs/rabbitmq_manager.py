@@ -17,7 +17,17 @@ class RabbitMQManager:
 
     def connect(self) -> bool:
         try: 
-            parameters = pika.URLParameters(settings.RABBITMQ_URL)
+            parameters = pika.ConnectionParameters(
+                host=settings.RABBITMQ_HOST,
+                port=settings.RABBITMQ_PORT,
+                virtual_host=settings.RABBITMQ_VHOST,
+                credentials=pika.PlainCredentials(
+                    username=settings.RABBITMQ_USER,
+                    password=settings.RABBITMQ_PASSWORD
+                ),
+                heartbeat=600,  # Set heartbeat to 10 minutes
+                blocked_connection_timeout=300  # Set timeout to 5 minutes
+            )
             self.connection = pika.BlockingConnection(parameters)
             self.channel = self.connection.channel()
 
@@ -65,6 +75,21 @@ class RabbitMQManager:
 
         logger.info("Queues setup completed.")
 
+    def safe_publish(self, queue_name: str, payload: Dict[str, Any], max_retries: int = 3):
+        """Wrapper with automatic reconnection"""
+        for attempt in range(max_retries):
+            try:
+                self.publish_task(queue_name, payload)
+                return  # Success, exit
+            except Exception as e:
+                logger.warning(f"Publish attempt {attempt + 1} failed: {e}")
+                if attempt < max_retries - 1:  # Don't reconnect on last attempt
+                    logger.info("Attempting to reconnect...")
+                    self.connect()  # Reconnect
+                else:
+                    logger.error(f"Failed to publish after {max_retries} attempts")
+                    raise
+
     def publish_task(self, queue_name: str, payload: Dict[str, Any]):
         """
         Publish a task to the specified queue.
@@ -75,28 +100,16 @@ class RabbitMQManager:
         """
 
         try:
-            attempted = 0
-            max_attempts = 3
-
+            # Check if channel exists and is open
             if not self.channel:
                 raise Exception("Channel is not initialized. Call connect() first.")
-
-            # Check channel health
+            
             if self.channel.is_closed:
-                logger.info("Channel is closed, creating a new connection.")
-                while attempted < max_attempts:
-                    try:
-                        status = self.connect()
-                        if status:
-                            logger.info("Reconnected to RabbitMQ successfully.")
-                            break
-                        attempted += 1
-                    except Exception as e:
-                        logger.error(f"Attempt {attempted + 1} failed: {e}")
-                        attempted += 1
-
-            if attempted == max_attempts:
-                raise Exception("Failed to reconnect to RabbitMQ after multiple attempts.")
+                raise Exception("Channel is closed. Connection may be lost.")
+            
+            # Check if connection is still alive
+            if not self.connection or self.connection.is_closed:
+                raise Exception("Connection is closed. Need to reconnect.")
 
             task = {
                 'task_id': str(uuid.uuid4()),
@@ -119,6 +132,7 @@ class RabbitMQManager:
             
         except Exception as e:
             logger.error(f"Failed to publish task: {e}")
+            raise
 
     def close(self):
         """Close connection"""

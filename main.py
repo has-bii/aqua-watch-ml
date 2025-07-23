@@ -66,7 +66,7 @@ def check_dependencies():
         # "Environment file": os.path.exists('.env'),
         "Supabase URL": settings.SUPABASE_URL is not None,
         "Supabase Key": settings.SUPABASE_SERVICE_KEY is not None,
-        "RabbitMQ URL": settings.RABBITMQ_URL is not None
+        "RabbitMQ URL": settings.RABBITMQ_URL is not None,
     }
     
     logger.info("Dependency Check:")

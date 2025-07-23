@@ -141,40 +141,45 @@ class MLPipeline:
         Validate the prediction for a given aquarium and parameter at a specific time.
         """
         try:
-            # Fetch the prediction
-            predicted_data = self.supabase.get_prediction(
-                aquarium_id=aquarium_id,
-                parameter=parameter,
-                target_time=target_time
-            )
+            # Fetch the prediction from Supabase
+            predicted_water_temperature = self.supabase.get_prediction(aquarium_id, "water_temperature", target_time)
+            predicted_water_temperature['target_time'] = pd.to_datetime(predicted_water_temperature['target_time'], format='ISO8601')
+            predicted_water_temperature.set_index('target_time', inplace=True)
 
-            if predicted_data is None:
-                raise ValueError("No prediction found")
-            
-            prediction_id = predicted_data['id']
-            predicted_value = predicted_data['predicted_value']
+            # get start and end date for validation
+            start_date = predicted_water_temperature.index.min()
+            end_date = predicted_water_temperature.index.max()
 
-            # Fetch the actual historical data
-            actual_historical_data = self.supabase.get_historical_data(
-                aquarium_id=aquarium_id,
-                target_time=target_time
-            )
+            actual_historical_data = self.supabase.get_historical_data(aquarium_id=aquarium_id, start_date=start_date, end_date=end_date)
 
             if actual_historical_data.empty:
-                raise ValueError("No historical data found for validation")
-            
-            actual_value = actual_historical_data[parameter].iloc[0]
-            actual_value = float(actual_value)
+                raise ValueError(f"No historical data found for aquarium {aquarium_id} between {start_date} and {end_date}")
 
-            # Calculate the absolute error
-            absolute_error = abs(predicted_value - actual_value)
+            actual_historical_data['created_at'] = pd.to_datetime(actual_historical_data['created_at'], format='ISO8601')
+            actual_historical_data.set_index('created_at', inplace=True)
+
+            for index, row in predicted_water_temperature.iterrows():
+                actual_value = actual_historical_data.loc[index, 'water_temperature'] if index in actual_historical_data.index else None # type: ignore
+                if actual_value is not None:
+                    predicted_water_temperature.at[index, 'actual_value'] = actual_value
+
+            # Drop where actual_value is null
+            predicted_water_temperature = predicted_water_temperature.dropna(subset=['actual_value'])
+
+            # Calculate prediction error
+            predicted_water_temperature['prediction_error'] = np.abs(predicted_water_temperature['predicted_value'] - predicted_water_temperature['actual_value']) 
+
+            # update created_at
+            created_at = datetime.now(timezone.utc).isoformat()
+            predicted_water_temperature['created_at'] = created_at
+
+            # Reset Index
+            predicted_water_temperature.reset_index(inplace=True, drop=False)
+            predicted_water_temperature['target_time'] = predicted_water_temperature['target_time'].apply(lambda x: x.isoformat())
 
             # Validate the prediction
             is_success = self.supabase.validate_prediction(
-                aquarium_id=aquarium_id,
-                prediction_id=prediction_id,
-                actual_value=actual_value,
-                prediction_error=absolute_error
+                data=predicted_water_temperature.to_dict(orient='records') # type: ignore
             )
 
             if is_success:
@@ -183,7 +188,7 @@ class MLPipeline:
                 raise ValueError("Failed to validate prediction")
 
         except Exception as e:
-            logger.error(f"Error validating prediction for {aquarium_id} - {parameter} at {target_time}: {e}")
+            logger.error(e)
             return False
 
     def train_water_temperature(self, 

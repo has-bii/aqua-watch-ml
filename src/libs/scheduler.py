@@ -20,14 +20,6 @@ class TaskScheduler:
         try:
             self.rabbitmq.connect()
             self.running = True
-            
-            # schedule.every(30).minutes.do(self.schedule_predictions)              # Every 30 minutes
-            # schedule.every(30).minutes.do(self.schedule_model_training)     # Daily training
-            
-            
-            # Run anomaly detection at minute 25 and minute 55 of every hour
-            # schedule.every().hour.at(":25").do(self.schedule_anomaly_detection)
-            # schedule.every().hour.at(":55").do(self.schedule_anomaly_detection)
 
             # Run predictions at minute 25 and minute 55 of every hour
             schedule.every().hour.at(":25").do(self.schedule_predictions)
@@ -41,6 +33,9 @@ class TaskScheduler:
 
             # Run model training at 00:00 every day
             schedule.every().day.at("00:00").do(self.schedule_model_training)
+
+            if settings.ENVIRONMENT == "development":
+                self.force_run_tasks()
 
             def run_scheduler():
                 while self.running:
@@ -73,7 +68,7 @@ class TaskScheduler:
                     'priority': 50,
                     'target_time': target_time.isoformat(),
                 }
-                self.rabbitmq.publish_task('validate_predictions', task_data)
+                self.rabbitmq.safe_publish('validate_predictions', task_data)
             
             logger.info(f"Scheduled prediction validation for {len(aquariums)} aquariums")
             
@@ -92,7 +87,7 @@ class TaskScheduler:
                     'user_id': aquarium['user_id'],
                     'priority': 200
                 }
-                self.rabbitmq.publish_task('anomaly_detection', task_data)
+                self.rabbitmq.safe_publish('anomaly_detection', task_data)
             
             logger.info(f"Scheduled anomaly detection for {len(aquariums)} aquariums")
             
@@ -112,7 +107,7 @@ class TaskScheduler:
                     'priority': 150,
                     'date_time_now': datetime.now(timezone.utc).isoformat()
                 }
-                self.rabbitmq.publish_task('predictions', task_data)
+                self.rabbitmq.safe_publish('predictions', task_data)
             
             logger.info(f"Scheduled predictions for {len(aquariums)} aquariums at {datetime.now(timezone.utc).isoformat()}")
             
@@ -132,7 +127,7 @@ class TaskScheduler:
                     'parameters': ['ph', 'do', 'water_temperature'],
                     'priority': 100  # Lowest priority
                 }
-                self.rabbitmq.publish_task('model_training', task_data)
+                self.rabbitmq.safe_publish('model_training', task_data)
             
             logger.info(f"Scheduled model training for {len(aquariums)} aquariums")
             
@@ -170,7 +165,7 @@ class TaskScheduler:
             }
         
     def force_run_tasks(self):
-        """Force run tasks immediately (for testing) - REMOVED critical monitoring"""
+        """Force run tasks immediately (for testing)"""
         try:
             logger.info("Force running scheduled tasks...")
             
@@ -181,6 +176,9 @@ class TaskScheduler:
             time.sleep(1)
             
             self.schedule_model_training()
+            time.sleep(1)
+
+            self.schedule_predict_validation()
             
             logger.info("All tasks force-scheduled successfully")
             
