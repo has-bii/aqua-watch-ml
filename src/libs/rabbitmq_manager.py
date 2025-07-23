@@ -36,7 +36,6 @@ class RabbitMQManager:
         except Exception as e:
             logger.error(f"Failed to connect to RabbitMQ: {e}")
             return False
-            raise
 
     def setup_queues(self):
         """Setup task queues"""
