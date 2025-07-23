@@ -1,4 +1,5 @@
 .DS_Store
 *.pyc
 .cache.sqlite
+data/cache/weather_cache.sqlite
 .env

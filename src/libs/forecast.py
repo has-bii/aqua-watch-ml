@@ -7,13 +7,18 @@ from typing import Dict
 from typing import Optional, Dict
 import math
 import logging
+import os
+from src.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
 class WeatherForecast:
     def __init__(self):
         self.url = "https://api.open-meteo.com/v1/forecast"
-        self.cache_session = requests_cache.CachedSession('.cache', expire_after = 3600)
+        # Use the designated cache directory instead of current directory
+        cache_path = os.path.join(settings.DATA_CACHE_PATH, 'weather_cache')
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        self.cache_session = requests_cache.CachedSession(cache_path, expire_after = 3600)
         self.retry_session = retry(self.cache_session, retries = 5, backoff_factor = 0.2)
         self.openmeteo = openmeteo_requests.Client(session = self.retry_session) # type: ignore
 

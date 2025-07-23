@@ -21,11 +21,15 @@ class TaskScheduler:
             self.rabbitmq.connect()
             self.running = True
             
-            schedule.every(5).minutes.do(self.schedule_anomaly_detection)        # Every 30 minutes
-            schedule.every(5).minutes.do(self.schedule_predictions)              # Every 30 minutes
-            schedule.every(5).minutes.do(self.schedule_model_training)     # Daily training
+            schedule.every(30).minutes.do(self.schedule_anomaly_detection)        # Every 30 minutes
+            schedule.every(30).minutes.do(self.schedule_predictions)              # Every 30 minutes
+            schedule.every(30).minutes.do(self.schedule_model_training)     # Daily training
             # schedule.every().day.at("00:00").do(self.schedule_model_training)     # Daily training
             
+            self.schedule_anomaly_detection()  # Initial run
+            self.schedule_predictions()         # Initial run
+            self.schedule_model_training()      # Initial run
+
             def run_scheduler():
                 while self.running:
                     try:
