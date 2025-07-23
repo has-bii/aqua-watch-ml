@@ -172,4 +172,27 @@ class SupabaseManager:
             logger.error(f"Error inserting prediction: {e}")
             raise ValueError(f"Error inserting prediction: {e}") 
         
-    
+    def get_prediction(self,
+                       aquarium_id: str,
+                       parameter: Literal['water_temperature', 'ph'],
+                       target_time: datetime) -> Optional[Dict]:
+        """
+        Get a specific prediction for an aquarium and parameter at a given time
+        Args:
+            aquarium_id: UUID of the aquarium
+            parameter: Target parameter (e.g., water_temperature)
+            target_time: Time of the prediction
+        Returns:
+            Dictionary with prediction data or None if not found
+        """
+
+        try:
+            response = self.supabase.table("predictions").select("*").eq("aquarium_id", aquarium_id).eq("target_parameter", parameter).eq("target_time", target_time.isoformat()).single().execute()
+
+            if response.data:
+                return response.data
+            else:
+                return None
+        except Exception as e:
+            logger.error(f"Error fetching prediction: {e}")
+            return None

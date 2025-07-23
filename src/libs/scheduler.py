@@ -21,14 +21,23 @@ class TaskScheduler:
             self.rabbitmq.connect()
             self.running = True
             
-            schedule.every(30).minutes.do(self.schedule_anomaly_detection)        # Every 30 minutes
-            schedule.every(30).minutes.do(self.schedule_predictions)              # Every 30 minutes
-            schedule.every(30).minutes.do(self.schedule_model_training)     # Daily training
-            # schedule.every().day.at("00:00").do(self.schedule_model_training)     # Daily training
+            # schedule.every(30).minutes.do(self.schedule_predictions)              # Every 30 minutes
+            # schedule.every(30).minutes.do(self.schedule_model_training)     # Daily training
+            # # schedule.every().day.at("00:00").do(self.schedule_model_training)     # Daily training
             
-            self.schedule_anomaly_detection()  # Initial run
-            self.schedule_predictions()         # Initial run
-            self.schedule_model_training()      # Initial run
+            # Run anomaly detection at minute 25 and minute 55 of every hour
+            schedule.every().hour.at(":25").do(self.schedule_anomaly_detection)
+            schedule.every().hour.at(":55").do(self.schedule_anomaly_detection)
+
+            # Run model training at 00:00 every day
+            schedule.every().day.at("00:00").do(self.schedule_model_training)
+
+            # Run predictions at minute 25 and minute 55 of every hour
+            schedule.every().hour.at(":25").do(self.schedule_predictions)
+            schedule.every().hour.at(":55").do(self.schedule_predictions)
+
+            # self.schedule_predictions()         # Initial run
+            # self.schedule_model_training()      # Initial run
 
             def run_scheduler():
                 while self.running:
@@ -57,12 +66,11 @@ class TaskScheduler:
                     'task_type': 'anomaly_detection',
                     'aquarium_id': aquarium['id'],
                     'user_id': aquarium['user_id'],
-                    'interval_minutes': 30,  # Fixed to 30 minutes
                     'priority': 200
                 }
                 self.rabbitmq.publish_task('anomaly_detection', task_data)
             
-            logger.info(f"Scheduled anomaly detection for {len(aquariums)} aquariums (30-min interval)")
+            logger.info(f"Scheduled anomaly detection for {len(aquariums)} aquariums")
             
         except Exception as e:
             logger.error(f"Error scheduling anomaly detection: {e}")
