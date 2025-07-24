@@ -106,7 +106,7 @@ class SupabaseManager:
         
     def get_aquarium_model_settings(self, aquarium_id: str) -> Dict[str, int] | None:
         try:
-            response = self.supabase.table("aquarium_settings").select("train_temp_model_days, train_ph_model_days").eq("aquarium_id", aquarium_id).single().execute()
+            response = self.supabase.table("aquarium_settings").select("train_temp_model_days, train_ph_model_days, prediction_parameters").eq("aquarium_id", aquarium_id).single().execute()
 
             return response.data if response.data else None
         except Exception as e:
@@ -156,6 +156,7 @@ class SupabaseManager:
             self,
             aquarium_id: str,
             parameter: Literal['water_temperature', 'ph'],
+            exclude_columns: list[Literal['is_prediction', 'ph', 'do', 'water_temperature']],
             data: pd.DataFrame,
             model_version: str
         ):
@@ -180,9 +181,9 @@ class SupabaseManager:
 
             # Prepare the data for insertion
             data['aquarium_id'] = aquarium_id
-            data['target_parameter'] = 'water_temperature'
+            data['target_parameter'] = parameter
             data.rename(columns={parameter: 'predicted_value'}, inplace=True)
-            data.drop(columns=['is_prediction', 'ph', 'do'], inplace=True, errors='ignore')  # Remove 'is_prediction' if it exists
+            data.drop(columns=exclude_columns, inplace=True, errors='ignore')  # Remove 'is_prediction' if it exists
 
             # Convert date to ISO format
             data['target_time'] = data['target_time'].apply(lambda x: x.isoformat() if isinstance(x, datetime) else x)

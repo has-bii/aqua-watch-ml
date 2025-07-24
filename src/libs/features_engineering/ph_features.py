@@ -34,7 +34,7 @@ class FeatureEngineeringPH:
         """
         try:
             # Prepare temporal features (without duplicate lag features)
-            historical_data = self.prepare_temporal_features(historical_data, dropNan=False)
+            historical_data = self.prepare_temporal_features(historical_data)
 
             # Prepare lag features separately 
             historical_data = self.prepare_lag_features(historical_data, dropNan=False)
@@ -67,8 +67,7 @@ class FeatureEngineeringPH:
             raise e
 
     def prepare_temporal_features(self, 
-                                  df: pd.DataFrame,
-                                  dropNan: Optional[bool] = True) -> pd.DataFrame:
+                                  df: pd.DataFrame) -> pd.DataFrame:
         """
         Prepare temporal features from the DataFrame (without lag features).
         """

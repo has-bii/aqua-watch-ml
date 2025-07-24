@@ -100,7 +100,7 @@ class MLWorker:
             self.supabase.log_ml_activity(
                 aquarium_id=aquarium_id,
                 activity_type='validate_predictions',
-                status='completed',
+                status='success',
                 metadata={
                     'validated_parameters': validated_params,
                     'target_time': target_time.isoformat()
@@ -185,9 +185,16 @@ class MLWorker:
         date_time_now = datetime.fromisoformat(task['date_time_now'])
         
         try:
+            parameters = None
+            aquarium_settings = self.supabase.get_aquarium_model_settings(aquarium_id)
+
+            if aquarium_settings:
+                parameters = aquarium_settings.get('parameters', ['water_temperature', 'ph', 'do'])
+
             self.ml_pipeline.predict(
                 aquarium_id=aquarium_id,
                 date_time_now=date_time_now,
+                parameters=parameters # type: ignore
             )
 
             logger.info(f"Prediction task completed for aquarium {aquarium_id}")

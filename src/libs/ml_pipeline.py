@@ -318,39 +318,16 @@ class MLPipeline:
             return True
         except Exception as e:
             raise Exception(f"Error during training pH model: {e}")
-
+   
     def predict(self,
                 aquarium_id: str,
-                date_time_now: datetime):
+                date_time_now: datetime,
+                parameters: List[Literal['water_temperature', 'ph', 'do']] = ['water_temperature', 'ph']
+                ):
         """
         Predict the specified parameter for the given aquarium within the date range.
         """
-
         try:
-            predicted_water_temperature = self.predict_water_temperature(
-                aquarium_id,
-                date_time_now
-            )
-
-        except Exception as e:
-            logger.error(f"Error predicting water temperature for aquarium {aquarium_id}: {e}")
-            raise
-
-    def predict_water_temperature(
-            self,
-            aquarium_id: str,
-            date_time_now: datetime,
-    ):
-        """
-        Predict the water temperature for the given aquarium at the specified date and time.
-        """
-        try:
-            model = self.models[self._get_model_key(aquarium_id, 'water_temperature')]
-            model_metadata = self.metadata[self._get_model_key(aquarium_id, 'water_temperature')]
-
-            if not model or not model_metadata:
-                raise ValueError(f"No model found for aquarium {aquarium_id} and parameter 'water_temperature'.")
-            
             # Fetch the latest 30 minute historical data
             historical_data = self.supabase.get_historical_data(
                 aquarium_id=aquarium_id,
@@ -365,6 +342,72 @@ class MLPipeline:
                 end_date=date_time_now
             )
 
+            # Convert historical data from 5-minute to 15-minute intervals
+            historical_data = self.convert_from_5min_to_15min(
+                historical_data,
+                target_cols=['water_temperature', 'ph', 'do'],
+                index_name='created_at'
+            )
+
+            if not isinstance(historical_data.index, pd.DatetimeIndex):
+                historical_data.index = pd.to_datetime(historical_data['created_at'], format='ISO8601') # type: ignore
+                historical_data.set_index('created_at', inplace=True)
+
+            # Create new DataFrame for prediction
+            index_range = pd.date_range(start=historical_data.index.min(), end=historical_data.index.max() + timedelta(hours=6), freq='15min')
+            prediction_df = pd.DataFrame(index=index_range)
+            prediction_df.index.name = 'created_at'
+            prediction_df.index = pd.to_datetime(prediction_df.index, format='ISO8601')
+            prediction_df = historical_data.reindex(index=prediction_df.index)
+
+            # Add prediction label for indicating if the row is a prediction
+            prediction_df.loc[prediction_df['water_temperature'].isna(), 'is_prediction'] = True
+            prediction_df.loc[prediction_df['water_temperature'].notna(), 'is_prediction'] = False
+
+            prediction_df = self.predict_water_temperature(
+                aquarium_id=aquarium_id,
+                date_time_now=date_time_now,
+                prediction_df=prediction_df,
+                water_change_data=water_change_data
+            )
+
+            if 'ph' in parameters:
+                # Fetch Feeding Data
+                feeding_data = self.supabase.get_feeding_data(
+                    aquarium_id=aquarium_id,
+                    start_date=(date_time_now - timedelta(hours=6)),
+                    end_date=date_time_now
+                )
+                prediction_df = self.predict_ph(
+                    aquarium_id=aquarium_id,
+                    date_time_now=date_time_now,
+                    prediction_df=prediction_df,
+                    water_change_data=water_change_data,
+                    feeding_data=feeding_data
+                )   
+
+            return prediction_df
+        except Exception as e:
+            logger.error(f"Error during prediction for aquarium {aquarium_id}: {e}")
+            raise
+
+    def predict_water_temperature(
+            self,
+            aquarium_id: str,
+            date_time_now: datetime,
+            prediction_df: pd.DataFrame,
+            water_change_data: pd.DataFrame
+    ):
+        """
+        Predict the water temperature for the given aquarium at the specified date and time.
+        """
+        try:
+            model = self.models[self._get_model_key(aquarium_id, 'water_temperature')]
+            model_metadata = self.metadata[self._get_model_key(aquarium_id, 'water_temperature')]
+
+            if not model or not model_metadata:
+                raise ValueError(f"No model found for aquarium {aquarium_id} and parameter 'water_temperature'.")
+
             # Get aquarium location data
             aquarium_geo = self.supabase.get_aquarium_geo(aquarium_id)
             if aquarium_geo is None:
@@ -377,36 +420,8 @@ class MLPipeline:
                 end_date=(date_time_now + timedelta(hours=6)).strftime('%Y-%m-%d')
             )
 
-            # Reindex to 15-minute intervals
-            historical_data['created_at'] = pd.to_datetime(historical_data['created_at'], format='ISO8601')
-            historical_data.set_index('created_at', inplace=True)
-            historical_data.sort_index(inplace=True)
-
-            full_index = pd.date_range(start=historical_data.index.min(), end=historical_data.index.max(), freq='15min')
-            historical_data = historical_data.reindex(full_index)
-            historical_data['water_temperature'] = historical_data['water_temperature'].interpolate(method='time').ffill().bfill()
-            historical_data.index.name = 'created_at'
-            historical_data.reset_index(inplace=True)
-
-            # Concate prediction_df with historical data
-            if not isinstance(historical_data.index, pd.DatetimeIndex):
-                historical_data['created_at'] = pd.to_datetime(historical_data['created_at'], format='ISO8601')
-                historical_data.set_index('created_at', inplace=True)
-
-            # Create new DataFrame for prediction
-            index_range = pd.date_range(start=historical_data.index.min(), end=historical_data.index.max() + timedelta(hours=6), freq='15min')
-            prediction_df = pd.DataFrame(index=index_range)
-            prediction_df.index.name = 'created_at'
-            prediction_df.index = pd.to_datetime(prediction_df.index, format='ISO8601')
-
-            prediction_df = historical_data.reindex(index=prediction_df.index)
-
             # Prepare features
             FEATURES = model_metadata['training_info']['features']
-
-            # Add prediction label for indicating if the row is a prediction
-            prediction_df.loc[prediction_df['water_temperature'].isna(), 'is_prediction'] = True
-            prediction_df.loc[prediction_df['water_temperature'].notna(), 'is_prediction'] = False
 
             # Prepare features for prediction
             prediction_df = self.features_water_temperature.prepare_features(prediction_df, dropNan=False, fillna=False)
@@ -423,6 +438,8 @@ class MLPipeline:
             # Predict water temperature
             target_prediction_index: pd.DatetimeIndex = prediction_df[prediction_df['water_temperature'].notna()].index.max() + timedelta(minutes=15)
             while target_prediction_index <= prediction_df.index.max():
+                print(f"Target prediction index: {target_prediction_index}")
+
                 X = prediction_df[target_prediction_index:target_prediction_index][FEATURES]
 
                 if not X.empty and model is not None:
@@ -461,23 +478,133 @@ class MLPipeline:
                 aquarium_id=aquarium_id,
                 parameter='water_temperature',
                 model_version=model_metadata['training_info']['model_version'],
-                data=prediction_df[prediction_df['is_prediction'] == True].reset_index().rename(columns={'created_at': 'target_time'})
+                data=prediction_df[prediction_df['is_prediction'] == True].reset_index().rename(columns={'created_at': 'target_time'}).copy(),
+                exclude_columns=['do', 'ph','is_prediction']
             )
 
             # Remove unnecessary columns
             prediction_df.drop(
                 columns=['confidence_lower', 'confidence_upper', 'std_error'],
+                inplace=True, errors='ignore'
             )
 
             return prediction_df
 
         except Exception as e:
-            logger.error(f"Error predicting water temperature for aquarium {aquarium_id}: {e}")
+            logger.error(f"Error in predict_water_temperature: {e}")
             self.supabase.log_ml_activity(
                 aquarium_id=aquarium_id,
-                activity_type="predict_water_temperature",
+                activity_type="predicting_water_temperature",
                 status="error",
                 error_message=f"Error predicting water temperature: {e}",
+                metadata={"date_time_now": date_time_now.isoformat()}
+            )
+            raise
+
+    def predict_ph(
+            self,
+            aquarium_id: str,
+            date_time_now: datetime,
+            prediction_df: pd.DataFrame,
+            water_change_data: pd.DataFrame,
+            feeding_data: pd.DataFrame
+    ):
+        """
+        Predict the pH for the given aquarium at the specified date and time.
+        """
+        try:
+            model = self.models[self._get_model_key(aquarium_id, 'ph')]
+            model_metadata = self.metadata[self._get_model_key(aquarium_id, 'ph')]
+
+            if not model or not model_metadata:
+                raise ValueError(f"No model found for aquarium {aquarium_id} and parameter 'ph'.")
+
+            # Prepare features
+            FEATURES = model_metadata['training_info']['features']
+
+            # Prepare features for prediction
+            prediction_df = self.features_ph.prepare_all_features(
+                historical_data=prediction_df,
+                water_change_data=water_change_data,
+                feed_data=feeding_data,
+                dropNan=False,
+            )
+
+            # Prepare rolling features
+            ph_rolling_mean_5 = prediction_df['ph_rolling_mean_5'].mean()
+            ph_rolling_mean_10 = prediction_df['ph_rolling_mean_10'].mean()
+            ph_rolling_mean_20 = prediction_df['ph_rolling_mean_20'].mean()
+            ph_rolling_std_5 = prediction_df['ph_rolling_std_5'].mean()
+            ph_rolling_std_10 = prediction_df['ph_rolling_std_10'].mean()
+            ph_rolling_std_20 = prediction_df['ph_rolling_std_20'].mean()
+
+            prediction_df.loc[prediction_df['is_prediction'] == True, 'ph_rolling_mean_5'] = ph_rolling_mean_5
+            prediction_df.loc[prediction_df['is_prediction'] == True, 'ph_rolling_mean_10'] = ph_rolling_mean_10
+            prediction_df.loc[prediction_df['is_prediction'] == True, 'ph_rolling_mean_20'] = ph_rolling_mean_20
+            prediction_df.loc[prediction_df['is_prediction'] == True, 'ph_rolling_std_5'] = ph_rolling_std_5
+            prediction_df.loc[prediction_df['is_prediction'] == True, 'ph_rolling_std_10'] = ph_rolling_std_10
+            prediction_df.loc[prediction_df['is_prediction'] == True, 'ph_rolling_std_20'] = ph_rolling_std_20
+
+            target_prediction_index: pd.DatetimeIndex = prediction_df[prediction_df['ph'].notna()].index.max() + timedelta(minutes=15)
+
+            while target_prediction_index <= prediction_df.index.max():
+                X = prediction_df[target_prediction_index:target_prediction_index][FEATURES]
+                prediction = model.predict(X)
+                prediction_df.loc[target_prediction_index, 'ph'] = math.ceil(prediction[0] * 100) / 100
+
+                self.features_ph.prepare_lag_features(prediction_df, False)
+                self.features_ph.prepare_diff_ph_features(prediction_df, False)
+
+                target_prediction_index: pd.DatetimeIndex = prediction_df[prediction_df['ph'].notna()].index.max() + timedelta(minutes=15)
+
+            FEATURES.remove('water_temperature')
+            prediction_df.drop(columns=FEATURES, inplace=True)
+
+            # After all predictions are made, add confidence intervals
+            predicted_rows = prediction_df[prediction_df['is_prediction'] == True]
+            
+            if not predicted_rows.empty:
+                predictions = predicted_rows['ph'].values
+                test_rmse = model_metadata['performance']['test_rmse']
+                
+                # Calculate confidence intervals
+                confidence_results = self.calculate_prediction_confidence(
+                    predictions=predictions,
+                    test_rmse=test_rmse,
+                    confidence_level=0.95
+                )
+                
+                # Add to DataFrame
+                for i, result in enumerate(confidence_results):
+                    row_idx = predicted_rows.index[i]
+                    prediction_df.loc[row_idx, 'confidence_lower'] = result['confidence_lower']
+                    prediction_df.loc[row_idx, 'confidence_upper'] = result['confidence_upper']
+                    prediction_df.loc[row_idx, 'std_error'] = result['std_error']
+
+            # Insert to Supabase
+            self.supabase.insert_prediction(
+                aquarium_id=aquarium_id,
+                parameter='ph',
+                model_version=model_metadata['training_info']['model_version'],
+                data=prediction_df[prediction_df['is_prediction'] == True].reset_index().rename(columns={'created_at': 'target_time'}).copy(),
+                exclude_columns=['do', 'water_temperature', 'is_prediction']
+            )
+
+            # Remove unnecessary columns
+            prediction_df.drop(
+                columns=['confidence_lower', 'confidence_upper', 'std_error'],
+                inplace=True, errors='ignore'
+            )
+
+            return prediction_df
+
+        except Exception as e:
+            logger.error(f"Error in predict_ph: {e}")
+            self.supabase.log_ml_activity(
+                aquarium_id=aquarium_id,
+                activity_type="predicting_ph",
+                status="error",
+                error_message=f"Error predicting pH: {e}",
                 metadata={"date_time_now": date_time_now.isoformat()}
             )
             raise
@@ -693,11 +820,12 @@ class MLPipeline:
                 # Insert the training data into Supabase
                 self.supabase.log_ml_activity(
                 aquarium_id=aquarium_id,
-                activity_type="model_training",
+                activity_type=f"model_training_{parameter}",
                 status="success",
                 processing_time_seconds=int((datetime.now(timezone.utc) - start_time).total_seconds()),
                 metadata={
-                    "parameter": TARGET,
+                    "parameter": parameter,
+                    "dataset_days_size": days_back,
                     "evaluation_metrics": evaluation_metrics,
                     "feature_importance": feature_importance.to_dict(),
                     "training_info": {
@@ -706,12 +834,13 @@ class MLPipeline:
                     }
                 })
             except Exception as e:
-                print(f"Error inserting training data into Supabase: {e}")
+                logger.error(f"Error logging ML activity for aquarium {aquarium_id}: {e}")
+                raise
         except Exception as e:
-            print(f"Error in train_model: {e}")
+            logger.error(f"Error during model training for aquarium {aquarium_id} and parameter {parameter}: {e}")
             self.supabase.log_ml_activity(
                 aquarium_id=aquarium_id,
-                activity_type="model_training",
+                activity_type=f"model_training_{parameter}",
                 status="error",
                 error_message=str(e),
                 metadata={"parameter": parameter}
