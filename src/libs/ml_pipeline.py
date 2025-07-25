@@ -115,6 +115,7 @@ class MLPipeline:
 
             # Update the models dictionary
             self.models[model_key] = model
+            self.metadata[model_key] = metadata
 
         except Exception as e:
             logger.error(f"Error saving model for {aquarium_id} - {parameter}: {e}")
