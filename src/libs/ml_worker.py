@@ -182,14 +182,14 @@ class MLWorker:
     def handle_predictions(self, task: dict):
         """Handle prediction tasks"""
         aquarium_id = task['aquarium_id']
-        date_time_now = datetime.fromisoformat(task['date_time_now'])
+        date_time_now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
         
         try:
             parameters = None
             aquarium_settings = self.supabase.get_aquarium_model_settings(aquarium_id)
 
             if aquarium_settings:
-                parameters = aquarium_settings.get('parameters', ['water_temperature', 'ph', 'do'])
+                parameters = aquarium_settings.get('prediction_parameters', ['water_temperature', 'ph', 'do'])
 
             self.ml_pipeline.predict(
                 aquarium_id=aquarium_id,

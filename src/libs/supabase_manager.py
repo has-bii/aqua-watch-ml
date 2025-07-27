@@ -171,7 +171,7 @@ class SupabaseManager:
             # Ensure the DataFrame has the required columns
             required_columns = [parameter, 'confidence_lower', 'confidence_upper', 'target_time', 'std_error']
             if not all(col in data.columns for col in required_columns):
-                raise ValueError(f"DataFrame must contain the following columns: {required_columns}")
+                raise ValueError(f"DataFrame must contain the following columns: {required_columns}, but got {data.columns.tolist()}")
             
             # Get min date  from the DataFrame
             min_date = data['target_time'].min()

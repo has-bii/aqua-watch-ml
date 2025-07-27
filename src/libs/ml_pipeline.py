@@ -5,8 +5,7 @@ ML Pipeline class for aquarium parameter prediction.
 import joblib
 import json
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from typing import Dict, List, Optional, Literal
+from typing import Dict, List, Literal
 import os
 from src.libs.supabase_manager import SupabaseManager
 from src.libs.features_engineering.water_temperature_features import FeatureEngineeringWaterTemperature
@@ -16,8 +15,6 @@ import xgboost as xgb
 import math
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 from src.config.settings import settings
@@ -37,11 +34,10 @@ class MLPipeline:
         self.metadata: Dict[str, Dict] = {}
 
         # Data configuration
-        self.DATA_INTERVAL = '15min'  # Data interval for historical data
-        self.HISTORICAL_DATA_DAYS_BACK = 30  # Days back for historical data
-        self.PERIODS_IN_HOUR = 4
-        self.PERIODS_IN_DAY = 96  # 24 hours * 4 periods per hour
-        self.MIN_TRAINING_SAMPLES = self.PERIODS_IN_DAY * 3
+        self.DATA_INTERVAL = '1h'
+        self.PERIODS_IN_HOUR = 1
+        self.PERIODS_IN_DAY = 24
+        self.MIN_TRAINING_SAMPLES = self.PERIODS_IN_DAY * 7  # Minimum samples required for training (7 days of hourly data)
 
         self.model_dir = settings.MODEL_SAVE_PATH
         
@@ -225,7 +221,7 @@ class MLPipeline:
                 end_date=end_date
             )
 
-            historical_data = self.convert_from_5min_to_15min(
+            historical_data = self.convert_from_5min_to_1hour(
                 historical_data,
                 target_cols=['water_temperature', 'ph', 'do'],
                 index_name='created_at'
@@ -235,24 +231,26 @@ class MLPipeline:
                 raise ValueError(f"Not enough data to train the model. Minimum required samples: {self.MIN_TRAINING_SAMPLES}, available: {len(historical_data)}")
             
             # Fetch water change data
-            water_change_data = self.supabase.get_water_changing_data(
-                aquarium_id,
-                start_date=start_date,
-                end_date=end_date
+            # water_change_data = self.supabase.get_water_changing_data(
+            #     aquarium_id,
+            #     start_date=start_date,
+            #     end_date=end_date
+            # )
+
+            df, features = self.features_water_temperature.prepare_all_features(
+                aquarium_id=aquarium_id,
+                historical_data=historical_data[['water_temperature', 'created_at']].copy(),
+                # water_change_data=water_change_data,
             )
 
-            df = self.features_water_temperature.prepare_all_features(
-            aquarium_id=aquarium_id,
-            historical_data=historical_data[['water_temperature', 'created_at']].copy(),
-            water_change_data=water_change_data,
-            )
+            logger.info(f"Features prepared for water temperature model: {features}")
 
             # Train the model
             self.train_model(
                 aquarium_id=aquarium_id,
                 parameter='water_temperature',
                 df=df,
-                remove_columns=['water_temperature', 'ph', 'do'],
+                features=features,
                 days_back=days_back
             )
 
@@ -276,8 +274,7 @@ class MLPipeline:
             if historical_data.empty:
                 raise ValueError(f"No historical data found for aquarium {aquarium_id} in the last {days_back} days.")
             
-            # Fetch water change data
-            historical_data = self.convert_from_5min_to_15min(
+            historical_data = self.convert_from_5min_to_1hour(
                 df=historical_data,
                 # target_col='ph',
                 index_name='created_at'
@@ -308,13 +305,13 @@ class MLPipeline:
                 feed_data=feeding_data
             )
 
-            self.train_model(
-                aquarium_id=aquarium_id,
-                parameter='ph',
-                df=df,
-                remove_columns=['ph', 'do'],
-                days_back=days_back
-            )
+            # self.train_model(
+            #     aquarium_id=aquarium_id,
+            #     parameter='ph',
+            #     df=df,
+            #     features=
+            #     days_back=days_back
+            # )
 
             return True
         except Exception as e:
@@ -329,22 +326,22 @@ class MLPipeline:
         Predict the specified parameter for the given aquarium within the date range.
         """
         try:
-            # Fetch the latest 30 minute historical data
+            # Fetch historical data for the last 24 hours
             historical_data = self.supabase.get_historical_data(
                 aquarium_id=aquarium_id,
-                start_date=(date_time_now - timedelta(hours=6)),
+                start_date=(date_time_now - timedelta(hours=24)),
                 end_date=date_time_now
             )
 
             # Fetch water change data
             water_change_data = self.supabase.get_water_changing_data(
                 aquarium_id=aquarium_id,
-                start_date=(date_time_now - timedelta(hours=6)),
+                start_date=(date_time_now - timedelta(hours=24)),
                 end_date=date_time_now
             )
 
-            # Convert historical data from 5-minute to 15-minute intervals
-            historical_data = self.convert_from_5min_to_15min(
+            # Convert historical data from 5-minute to 1-hour intervals
+            historical_data = self.convert_from_5min_to_1hour(
                 historical_data,
                 target_cols=['water_temperature', 'ph', 'do'],
                 index_name='created_at'
@@ -355,7 +352,7 @@ class MLPipeline:
                 historical_data.set_index('created_at', inplace=True)
 
             # Create new DataFrame for prediction
-            index_range = pd.date_range(start=historical_data.index.min(), end=historical_data.index.max() + timedelta(hours=6), freq='15min')
+            index_range = pd.date_range(start=historical_data.index.min(), end=historical_data.index.max() + timedelta(hours=24), freq='1h')
             prediction_df = pd.DataFrame(index=index_range)
             prediction_df.index.name = 'created_at'
             prediction_df.index = pd.to_datetime(prediction_df.index, format='ISO8601')
@@ -417,8 +414,8 @@ class MLPipeline:
             # Get Wheather Forecast
             forecast = self.features_water_temperature._get_weather_forecast(
                 aquarium_geo=aquarium_geo,
-                start_date=(date_time_now - timedelta(hours=6)).strftime('%Y-%m-%d'),
-                end_date=(date_time_now + timedelta(hours=6)).strftime('%Y-%m-%d')
+                start_date=(date_time_now - timedelta(hours=24)).strftime('%Y-%m-%d'),
+                end_date=(date_time_now + timedelta(hours=24)).strftime('%Y-%m-%d')
             )
 
             # Prepare features
@@ -431,35 +428,37 @@ class MLPipeline:
                 weather_df=forecast.get('forecast', pd.DataFrame()),
                 sunset_sunrise_df=forecast.get('sunset_sunrise', pd.DataFrame()),
             )
-            prediction_df = self.features_water_temperature.prepare_features_with_water_change(
-                prediction_df,
-                water_change_data,
-            )
+
+            # prediction_df = self.features_water_temperature.prepare_features_with_water_change(
+            #     prediction_df,
+            #     water_change_data,
+            # )
 
             # Predict water temperature
-            target_prediction_index: pd.DatetimeIndex = prediction_df[prediction_df['water_temperature'].notna()].index.max() + timedelta(minutes=15)
-            while target_prediction_index <= prediction_df.index.max():
-                print(f"Target prediction index: {target_prediction_index}")
+            before_prediction_index: pd.DatetimeIndex = prediction_df.loc[prediction_df['water_temperature'].notna()].index.max()
+            target_prediction_index: pd.DatetimeIndex = before_prediction_index + timedelta(hours=1)
 
+            while target_prediction_index <= prediction_df.index.max():
                 X = prediction_df[target_prediction_index:target_prediction_index][FEATURES]
 
-                if not X.empty and model is not None:
+                if X.empty is not None:
                     prediction = model.predict(X)
-                    prediction_df.loc[target_prediction_index, 'water_temperature'] = math.ceil(prediction[0] * 100) / 100.0
-
-                self.features_water_temperature.prepare_lag_features(prediction_df)
-
-                target_prediction_index: pd.DatetimeIndex = prediction_df[prediction_df['water_temperature'].notna()].index.max() + timedelta(minutes=15)
+                    prediction_df.loc[target_prediction_index, 'water_temperature'] = math.floor(prediction[0] * 100) / 100.0
+                    self.features_water_temperature.prepare_lag_features(prediction_df)
+                    target_prediction_index += timedelta(hours=1)
+                else:
+                    logger.warning(f"No features available for prediction at index {target_prediction_index}. Skipping prediction.")
+                    raise ValueError(f"No features available for prediction at index {target_prediction_index}. Skipping prediction.")
 
             prediction_df.drop(columns=FEATURES, inplace=True)
 
             # After all predictions are made, add confidence intervals
             predicted_rows = prediction_df[prediction_df['is_prediction'] == True]
-            
+
             if not predicted_rows.empty:
                 predictions = predicted_rows['water_temperature'].values
                 test_rmse = model_metadata['performance']['test_rmse']
-                
+
                 # Calculate confidence intervals
                 confidence_results = self.calculate_prediction_confidence(
                     predictions=predictions,
@@ -474,12 +473,17 @@ class MLPipeline:
                     prediction_df.loc[row_idx, 'confidence_upper'] = result['confidence_upper']
                     prediction_df.loc[row_idx, 'std_error'] = result['std_error']
 
+            insertion_data = prediction_df.copy()
+            insertion_data = insertion_data[insertion_data['is_prediction'] == True]
+            insertion_data.reset_index(inplace=True, drop=False)
+            insertion_data.rename(columns={'created_at': 'target_time'}, inplace=True)
+
             # Insert to Supabase
             self.supabase.insert_prediction(
                 aquarium_id=aquarium_id,
                 parameter='water_temperature',
                 model_version=model_metadata['training_info']['model_version'],
-                data=prediction_df[prediction_df['is_prediction'] == True].reset_index().rename(columns={'created_at': 'target_time'}).copy(),
+                data=insertion_data,
                 exclude_columns=['do', 'ph','is_prediction']
             )
 
@@ -640,12 +644,12 @@ class MLPipeline:
         
         return results
 
-    def convert_from_5min_to_15min(self, 
+    def convert_from_5min_to_1hour(self, 
                                    df: pd.DataFrame, 
                                    target_cols: List[str] = ['water_temperature', 'ph', 'do'],
                                    index_name: str = 'created_at') -> pd.DataFrame:
         """
-        Convert a DataFrame with 5-minute intervals to 15-minute intervals.
+        Convert a DataFrame with 5-minute intervals to 1-hour intervals.
         """
         is_reset_index = False
 
@@ -654,7 +658,7 @@ class MLPipeline:
             df.set_index(index_name, inplace=True)
             is_reset_index = True
 
-        # Resample to 15-minute intervals
+        # Resample to 1-hour intervals
         full_index = pd.date_range(start=df.index.min(), end=df.index.max(), freq=self.DATA_INTERVAL)
         df = df.reindex(full_index)
         df.index.name = index_name
@@ -676,7 +680,7 @@ class MLPipeline:
                     aquarium_id: str,
                     parameter: Literal['water_temperature', 'ph', 'do'],
                     df: pd.DataFrame,
-                    remove_columns: List[str],
+                    features: list[str],
                     days_back: int
                     ):
         """
@@ -689,9 +693,7 @@ class MLPipeline:
             train_size = int(len(df) * 0.8)
             train, test = df[:train_size], df[train_size:]
 
-            FEATURES = df.columns.tolist()
-            for col in remove_columns:
-                FEATURES.remove(col) if col in FEATURES else None
+            FEATURES = features
 
             TARGET = parameter
 
