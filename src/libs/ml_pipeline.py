@@ -483,13 +483,13 @@ class MLPipeline:
 
             # Insert to Supabase
             logger.info(f"Inserting water temperature predictions for aquarium {aquarium_id} into Supabase.")
-            # self.supabase.insert_prediction(
-            #     aquarium_id=aquarium_id,
-            #     parameter='water_temperature',
-            #     model_version=model_metadata['training_info']['model_version'],
-            #     data=insertion_data,
-            #     exclude_columns=['do', 'ph','is_prediction']
-            # )
+            self.supabase.insert_prediction(
+                aquarium_id=aquarium_id,
+                parameter='water_temperature',
+                model_version=model_metadata['training_info']['model_version'],
+                data=insertion_data,
+                exclude_columns=['do', 'ph','is_prediction']
+            )
 
             # Remove unnecessary columns
             prediction_df.drop(
