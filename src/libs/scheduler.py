@@ -32,8 +32,6 @@ class TaskScheduler:
 
             if settings.ENVIRONMENT == "development":
                 self.force_run_tasks()
-            else:
-                self.schedule_model_training()
 
             def run_scheduler():
                 while self.running:

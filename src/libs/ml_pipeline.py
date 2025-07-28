@@ -400,10 +400,12 @@ class MLPipeline:
         Predict the water temperature for the given aquarium at the specified date and time.
         """
         try:
+            logger.info(f"Starting water temperature prediction for aquarium {aquarium_id} at {date_time_now.isoformat()}")
             model = self.models[self._get_model_key(aquarium_id, 'water_temperature')]
             model_metadata = self.metadata[self._get_model_key(aquarium_id, 'water_temperature')]
 
             if not model or not model_metadata:
+                logger.error(f"No model found for aquarium {aquarium_id} and parameter 'water_temperature'.")
                 raise ValueError(f"No model found for aquarium {aquarium_id} and parameter 'water_temperature'.")
 
             # Get aquarium location data
@@ -420,6 +422,7 @@ class MLPipeline:
 
             # Prepare features
             FEATURES = model_metadata['training_info']['features']
+            logger.info(f"Features for water temperature prediction: {FEATURES}")
 
             # Prepare features for prediction
             prediction_df = self.features_water_temperature.prepare_features(prediction_df, dropNan=False, fillna=False)
@@ -479,13 +482,14 @@ class MLPipeline:
             insertion_data.rename(columns={'created_at': 'target_time'}, inplace=True)
 
             # Insert to Supabase
-            self.supabase.insert_prediction(
-                aquarium_id=aquarium_id,
-                parameter='water_temperature',
-                model_version=model_metadata['training_info']['model_version'],
-                data=insertion_data,
-                exclude_columns=['do', 'ph','is_prediction']
-            )
+            logger.info(f"Inserting water temperature predictions for aquarium {aquarium_id} into Supabase.")
+            # self.supabase.insert_prediction(
+            #     aquarium_id=aquarium_id,
+            #     parameter='water_temperature',
+            #     model_version=model_metadata['training_info']['model_version'],
+            #     data=insertion_data,
+            #     exclude_columns=['do', 'ph','is_prediction']
+            # )
 
             # Remove unnecessary columns
             prediction_df.drop(
