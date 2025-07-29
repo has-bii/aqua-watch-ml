@@ -55,6 +55,10 @@ class MLPipeline:
         Load saved models and metadata from the model directory. 
         """
         try:
+            # Clear existing models and metadata
+            self.models.clear()
+            self.metadata.clear()
+
             for model_file in os.listdir(self.model_dir):
                 if model_file.endswith('_model.joblib'):
                     model_key = model_file.replace('_model.joblib', '')
@@ -326,6 +330,9 @@ class MLPipeline:
         Predict the specified parameter for the given aquarium within the date range.
         """
         try:
+            # load models and metadata
+            self._load_saved_models()
+
             # Fetch historical data for the last 24 hours
             historical_data = self.supabase.get_historical_data(
                 aquarium_id=aquarium_id,
