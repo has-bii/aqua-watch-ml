@@ -299,19 +299,19 @@ class MLPipeline:
             )
 
             # Prepare features
-            df = self.features_ph.prepare_all_features(
+            df, features = self.features_ph.prepare_all_features(
                 historical_data=historical_data,
                 water_change_data=water_change_data,
                 feed_data=feeding_data
             )
 
-            # self.train_model(
-            #     aquarium_id=aquarium_id,
-            #     parameter='ph',
-            #     df=df,
-            #     features=
-            #     days_back=days_back
-            # )
+            self.train_model(
+                aquarium_id=aquarium_id,
+                parameter='ph',
+                df=df,
+                features=features,
+                days_back=days_back
+            )
 
             return True
         except Exception as e:
@@ -530,43 +530,30 @@ class MLPipeline:
 
             # Prepare features
             FEATURES = model_metadata['training_info']['features']
+            logger.info(f"Features for pH prediction: {FEATURES}")
 
             # Prepare features for prediction
-            prediction_df = self.features_ph.prepare_all_features(
+            prediction_df, _ = self.features_ph.prepare_all_features(
                 historical_data=prediction_df,
                 water_change_data=water_change_data,
-                feed_data=feeding_data,
-                dropNan=False,
+                feed_data= feeding_data
             )
 
-            # Prepare rolling features
-            ph_rolling_mean_5 = prediction_df['ph_rolling_mean_5'].mean()
-            ph_rolling_mean_10 = prediction_df['ph_rolling_mean_10'].mean()
-            ph_rolling_mean_20 = prediction_df['ph_rolling_mean_20'].mean()
-            ph_rolling_std_5 = prediction_df['ph_rolling_std_5'].mean()
-            ph_rolling_std_10 = prediction_df['ph_rolling_std_10'].mean()
-            ph_rolling_std_20 = prediction_df['ph_rolling_std_20'].mean()
-
-            prediction_df.loc[prediction_df['is_prediction'] == True, 'ph_rolling_mean_5'] = ph_rolling_mean_5
-            prediction_df.loc[prediction_df['is_prediction'] == True, 'ph_rolling_mean_10'] = ph_rolling_mean_10
-            prediction_df.loc[prediction_df['is_prediction'] == True, 'ph_rolling_mean_20'] = ph_rolling_mean_20
-            prediction_df.loc[prediction_df['is_prediction'] == True, 'ph_rolling_std_5'] = ph_rolling_std_5
-            prediction_df.loc[prediction_df['is_prediction'] == True, 'ph_rolling_std_10'] = ph_rolling_std_10
-            prediction_df.loc[prediction_df['is_prediction'] == True, 'ph_rolling_std_20'] = ph_rolling_std_20
-
-            target_prediction_index: pd.DatetimeIndex = prediction_df[prediction_df['ph'].notna()].index.max() + timedelta(minutes=15)
+            before_prediction_index: pd.DatetimeIndex = prediction_df.loc[prediction_df['ph'].notna()].index.max()
+            target_prediction_index: pd.DatetimeIndex = before_prediction_index + timedelta(hours=1)
 
             while target_prediction_index <= prediction_df.index.max():
                 X = prediction_df[target_prediction_index:target_prediction_index][FEATURES]
-                prediction = model.predict(X)
-                prediction_df.loc[target_prediction_index, 'ph'] = math.ceil(prediction[0] * 100) / 100
 
-                self.features_ph.prepare_lag_features(prediction_df, False)
-                self.features_ph.prepare_diff_ph_features(prediction_df, False)
+                if X.empty is not None:
+                    prediction = model.predict(X)
+                    prediction_df.loc[target_prediction_index, 'ph'] = math.floor(prediction[0] * 100) / 100.0
+                    self.features_ph.prepare_lag_features(prediction_df)
+                    target_prediction_index += timedelta(hours=1)
+                else:
+                    logger.warning(f"No features available for prediction at index {target_prediction_index}. Skipping prediction.")
+                    raise ValueError(f"No features available for prediction at index {target_prediction_index}. Skipping prediction.")
 
-                target_prediction_index: pd.DatetimeIndex = prediction_df[prediction_df['ph'].notna()].index.max() + timedelta(minutes=15)
-
-            FEATURES.remove('water_temperature')
             prediction_df.drop(columns=FEATURES, inplace=True)
 
             # After all predictions are made, add confidence intervals
@@ -590,13 +577,19 @@ class MLPipeline:
                     prediction_df.loc[row_idx, 'confidence_upper'] = result['confidence_upper']
                     prediction_df.loc[row_idx, 'std_error'] = result['std_error']
 
+            insertion_data = prediction_df.copy()
+            insertion_data = insertion_data[insertion_data['is_prediction'] == True]
+            insertion_data.reset_index(inplace=True, drop=False)
+            insertion_data.rename(columns={'created_at': 'target_time'}, inplace=True)
+
             # Insert to Supabase
+            logger.info(f"Inserting water temperature predictions for aquarium {aquarium_id} into Supabase.")
             self.supabase.insert_prediction(
                 aquarium_id=aquarium_id,
                 parameter='ph',
                 model_version=model_metadata['training_info']['model_version'],
-                data=prediction_df[prediction_df['is_prediction'] == True].reset_index().rename(columns={'created_at': 'target_time'}).copy(),
-                exclude_columns=['do', 'water_temperature', 'is_prediction']
+                data=insertion_data,
+                exclude_columns=['do', 'water_temperature','is_prediction']
             )
 
             # Remove unnecessary columns
@@ -671,7 +664,7 @@ class MLPipeline:
         # Interpolate missing values for target columns
         for col in target_cols:
             if col in df.columns:
-                df[col] = df[col].interpolate(method='time').ffill().bfill()
+                df[col] = df[col].interpolate(method='linear')
             else:
                 logger.warning(f"Column '{col}' not found in DataFrame. Skipping interpolation for this column.")
 

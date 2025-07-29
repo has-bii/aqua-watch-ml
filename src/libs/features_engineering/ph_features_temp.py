@@ -1,5 +1,6 @@
+from src.libs.supabase_manager import SupabaseManager
 import pandas as pd
-from typing import Optional, Tuple, List
+from typing import Optional
 import logging
 
 logger = logging.getLogger(__name__)
@@ -7,45 +8,66 @@ logger = logging.getLogger(__name__)
 class FeatureEngineeringPH:
     LAG_PERIODS = [1, 2, 3]
     
-    WATER_CHANGE_WINDOW_MINUTES = 120
-    AFTER_FEED_WINDOW_MINUTES = 120
+    # Define windows in terms of data points instead of minutes
+    DATA_INTERVAL_MINUTES = 15
+    WATER_CHANGE_WINDOW_POINTS = 6   # 6 points = 90 minutes
+    AFTER_FEED_WINDOW_POINTS = 20    # 20 points = 300 minutes (5 hours)
     
-    DEFAULT_MINUTES_AFTER_WATER_CHANGE = 9999
-    DEFAULT_MINUTES_AFTER_FEED = 9999
+    # Convert to minutes for the existing logic
+    WATER_CHANGE_WINDOW_MINUTES = WATER_CHANGE_WINDOW_POINTS * DATA_INTERVAL_MINUTES  # 90
+    AFTER_FEED_WINDOW_MINUTES = AFTER_FEED_WINDOW_POINTS * DATA_INTERVAL_MINUTES      # 300
+    
+    DEFAULT_MINUTES_AFTER_WATER_CHANGE = 1000
+    DEFAULT_MINUTES_AFTER_FEED = 1000
     DEFAULT_PERCENTAGE_CHANGED = 0.0
+
+    def __init__(self):
+        self.supabase = SupabaseManager()
 
     def prepare_all_features(self,
                              historical_data: pd.DataFrame,
-                             water_change_data: pd.DataFrame,
-                             feed_data: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
+                                water_change_data: pd.DataFrame,
+                                feed_data: pd.DataFrame,
+                                dropNan: Optional[bool] = True) -> pd.DataFrame:
         """
         Prepare all features for pH prediction.
         """
         try:
-            features = ['water_temperature']
-
             # Prepare temporal features (without duplicate lag features)
-            historical_data = self.prepare_temporal_features(historical_data, features)
+            historical_data = self.prepare_temporal_features(historical_data)
 
             # Prepare lag features separately 
-            historical_data = self.prepare_lag_features(historical_data, features)
+            historical_data = self.prepare_lag_features(historical_data, dropNan=False)
 
             # Prepare features related to water changes
             historical_data = self.prepare_features_with_water_change(
-                historical_data, water_change_data, features, index_name='created_at',
+                historical_data, water_change_data, index_name='created_at'
             )
 
             # Prepare feed features with enhanced debugging
-            historical_data = self.prepare_feed_features(historical_data, feed_data, features)
+            historical_data = self.prepare_feed_features(historical_data, feed_data)
 
-            return historical_data, features
+            # Prepare difference in pH features
+            historical_data = self.prepare_diff_ph_features(historical_data, dropNan=False)
+
+            # Prepare rolling features
+            historical_data = self.prepare_rolling_features(historical_data)
+
+            if dropNan:
+                # Drop rows with NaN values after all feature preparations
+                historical_data.dropna(inplace=True)
+
+            if not isinstance(historical_data.index, pd.DatetimeIndex):
+                # Ensure the index is a DatetimeIndex
+                historical_data.set_index('created_at', inplace=True)
+
+            return historical_data
         except Exception as e:
             logger.error(f"Error preparing all features: {e}")
             raise e
 
     def prepare_temporal_features(self, 
-                                  df: pd.DataFrame,
-                                  features: Optional[list[str]] = None) -> pd.DataFrame:
+                                  df: pd.DataFrame) -> pd.DataFrame:
         """
         Prepare temporal features from the DataFrame (without lag features).
         """
@@ -59,12 +81,10 @@ class FeatureEngineeringPH:
 
             # Time-based features only
             df['hour_of_day'] = df['created_at'].dt.hour
+            df['minutes_of_day'] = df['created_at'].dt.hour * 60 + df['created_at'].dt.minute
 
             if is_reset_index:
                 df.set_index('created_at', inplace=True)
-
-            if features:
-                features.append('hour_of_day')
 
             return df
         except Exception as e:
@@ -72,16 +92,13 @@ class FeatureEngineeringPH:
         
     def prepare_lag_features(self, 
                                 df: pd.DataFrame, 
-                                features: Optional[List[str]] = None) -> pd.DataFrame:
+                                dropNan: Optional[bool] = True) -> pd.DataFrame:
         """
         Prepare lag features from the DataFrame.
         """
         try:
             for lag in self.LAG_PERIODS:
                 df[f'lag_{lag}'] = df['ph'].shift(lag)
-
-            if features is not None:
-                features.extend([f'lag_{lag}' for lag in self.LAG_PERIODS])
 
             return df
         except Exception as e:
@@ -90,7 +107,6 @@ class FeatureEngineeringPH:
     def prepare_features_with_water_change(self, 
                                        df: pd.DataFrame, 
                                        water_change_df: pd.DataFrame,
-                                       features: Optional[List[str]] = None,
                                        index_name: Optional[str] = 'created_at') -> pd.DataFrame:
         """
         Create features related to water changes with support for multiple events.
@@ -110,7 +126,7 @@ class FeatureEngineeringPH:
             if water_change_df.empty:
                 # Initialize with default values when no water changes exist
                 df['minutes_after_water_change'] = self.DEFAULT_MINUTES_AFTER_WATER_CHANGE
-                # df['diff_water_temp_after_change'] = 0.0
+                df['diff_water_temp_after_change'] = 0.0
                 df['percentage_water_changed'] = self.DEFAULT_PERCENTAGE_CHANGED
                 return df
         
@@ -134,13 +150,13 @@ class FeatureEngineeringPH:
 
             # Initialize all features with default values
             df_working['minutes_after_water_change'] = self.DEFAULT_MINUTES_AFTER_WATER_CHANGE
-            # df_working['diff_water_temp_after_change'] = 0.0
+            df_working['diff_water_temp_after_change'] = 0.0
             df_working['percentage_water_changed'] = self.DEFAULT_PERCENTAGE_CHANGED
 
             # Process each water change event
             for _, water_change in water_change_df_working.iterrows():
                 water_change_time = water_change['changed_at']
-                # water_temp_added = water_change['water_temperature_added']
+                water_temp_added = water_change['water_temperature_added']
                 percentage_changed = water_change['percentage_changed']
                 
                 # Calculate time differences for all records (vectorized operation)
@@ -158,10 +174,10 @@ class FeatureEngineeringPH:
                     # Update time since water change
                     df_working.loc[update_mask, 'minutes_after_water_change'] = time_diffs[update_mask].astype(int)
                     
-                    # # Update temperature difference feature
-                    # df_working.loc[update_mask, 'diff_water_temp_after_change'] = (
-                    #     df_working.loc[update_mask, 'water_temperature'] - water_temp_added
-                    # )
+                    # Update temperature difference feature
+                    df_working.loc[update_mask, 'diff_water_temp_after_change'] = (
+                        df_working.loc[update_mask, 'water_temperature'] - water_temp_added
+                    )
                     
                     # Update percentage changed feature
                     df_working.loc[update_mask, 'percentage_water_changed'] = percentage_changed
@@ -170,13 +186,6 @@ class FeatureEngineeringPH:
             if hist_was_indexed:
                 df_working.set_index(index_name, inplace=True)
 
-            if features is not None:
-                features.extend([
-                    'minutes_after_water_change',
-                    # 'diff_water_temp_after_change',
-                    'percentage_water_changed'
-                ])
-
             return df_working
 
         except Exception as e:
@@ -184,8 +193,7 @@ class FeatureEngineeringPH:
 
     def prepare_feed_features(self,
                           historical_data: pd.DataFrame,
-                          feed_data: pd.DataFrame,
-                          features: Optional[List[str]]) -> pd.DataFrame:
+                          feed_data: pd.DataFrame) -> pd.DataFrame:
         """
         Prepare features related to feed data with enhanced time window handling.
         
@@ -197,22 +205,22 @@ class FeatureEngineeringPH:
             DataFrame with added 'minutes_after_feed' feature
         """
         try:
+            if feed_data.empty:
+                historical_data['minutes_after_feed'] = self.DEFAULT_MINUTES_AFTER_FEED
+                return historical_data
+        
             # Work with copies to avoid modifying original data
             df_working = historical_data.copy()
             feed_df_working = feed_data.copy()
-
-            feed_was_indexed = isinstance(feed_df_working.index, pd.DatetimeIndex)
-            if feed_was_indexed:
-                feed_df_working.reset_index(inplace=True)
-
-            if feed_df_working.empty:
-                historical_data['minutes_after_feed'] = self.DEFAULT_MINUTES_AFTER_FEED
-                return historical_data
             
             # Handle index and datetime conversion
             hist_was_indexed = isinstance(df_working.index, pd.DatetimeIndex)
             if hist_was_indexed:
                 df_working.reset_index(inplace=True)
+            
+            feed_was_indexed = isinstance(feed_df_working.index, pd.DatetimeIndex)
+            if feed_was_indexed:
+                feed_df_working.reset_index(inplace=True)
             
             # Ensure datetime columns are properly formatted
             df_working['created_at'] = pd.to_datetime(df_working['created_at'])
@@ -241,7 +249,7 @@ class FeatureEngineeringPH:
                 return df_working
             
             # Process each feed event
-            for _, feed_row in feed_df_working.iterrows():
+            for idx, feed_row in feed_df_working.iterrows():
                 feed_time = feed_row['fed_at']
                 
                 # Calculate time differences for all records (vectorized operation)
@@ -260,12 +268,62 @@ class FeatureEngineeringPH:
             # Restore original index structure if needed
             if hist_was_indexed:
                 df_working.set_index('created_at', inplace=True)
-
-            if features is not None:
-                features.append('minutes_after_feed')
             
             return df_working
         
         except Exception as e:
             raise ValueError(f"Error preparing feed features: {e}")
+
+    def prepare_diff_ph_features(self,
+                                 df: pd.DataFrame,
+                                dropNan: Optional[bool] = True,
+                                fillNaNValueWith: Optional[float] = 0.0
+        ) -> pd.DataFrame:
+        """
+        Prepare features related to the difference in pH values.
+        """
+        try:
+            if 'ph' not in df.columns:
+                raise ValueError("DataFrame must contain 'ph' column for difference features.")
+
+            # Calculate the difference in pH values
+            df['diff_ph'] = df['ph'].diff()
+
+            # Fill NaN values resulting from the diff operation
+            if not dropNan:
+                df.fillna({
+                    'diff_ph': fillNaNValueWith
+                }, inplace=True)
+
+
+            return df
+        except Exception as e:
+            raise ValueError(f"Error preparing diff pH features: {e}")
+        
+    def prepare_rolling_features(self, df: pd.DataFrame, windows=[5, 10, 20]) -> pd.DataFrame:
+        """
+        Add rolling features for pH values.
+        """
+        for window in windows:
+            df[f'ph_rolling_mean_{window}'] = df['ph'].rolling(window=window).mean()
+            df[f'ph_rolling_std_{window}'] = df['ph'].rolling(window=window).std()
+        return df
+
+    def add_velocity_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Add rate of change features.
+        """
+        # Calculate time intervals between measurements
+        if isinstance(df.index, pd.DatetimeIndex):
+            time_diffs = df.index.to_series().diff().dt.total_seconds().fillna(self.DATA_INTERVAL_MINUTES * 60)
+        else:
+            # If created_at is a column
+            time_diffs = pd.to_datetime(df['created_at']).diff().dt.total_seconds().fillna(self.DATA_INTERVAL_MINUTES * 60)
+        
+        # pH velocity (change per second, then convert to change per minute)
+        df['ph_velocity'] = df['diff_ph'] / (time_diffs / 60)
+        df['ph_velocity'].fillna(0, inplace=True)
+        
+        return df
+    
     

@@ -21,14 +21,14 @@ class TaskScheduler:
             self.rabbitmq.connect()
             self.running = True
 
-            # # Run predictions at minute 25 and minute 55 of every hour
+            # # Run predictions at minute 55 of every hour
             schedule.every().hour.at(":55").do(self.schedule_predictions)
 
-            # Run validate predictions at minute 00
+            # Run validate predictions at minute 05
             schedule.every().hour.at(":05").do(self.schedule_predict_validation)
 
             # # Run model training at 00:00 every day
-            schedule.every().day.at("00:00").do(self.schedule_model_training)
+            schedule.every().hour.at(":50").do(self.schedule_model_training)
 
             if settings.ENVIRONMENT == "development":
                 self.force_run_tasks()
