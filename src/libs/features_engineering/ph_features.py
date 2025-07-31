@@ -14,6 +14,8 @@ class FeatureEngineeringPH:
     DEFAULT_MINUTES_AFTER_FEED = 9999
     DEFAULT_PERCENTAGE_CHANGED = 0.0
 
+    ROLLING_WINDOW_SIZE = [2, 3, 4]
+
     def prepare_all_features(self,
                              historical_data: pd.DataFrame,
                              water_change_data: pd.DataFrame,
@@ -29,6 +31,9 @@ class FeatureEngineeringPH:
 
             # Prepare lag features separately 
             historical_data = self.prepare_lag_features(historical_data, features)
+
+            # Prepare rolling features
+            historical_data = self.prepare_rolling_features(historical_data, features)
 
             # Prepare features related to water changes
             historical_data = self.prepare_features_with_water_change(
@@ -87,6 +92,23 @@ class FeatureEngineeringPH:
         except Exception as e:
             raise ValueError(f"Error preparing lag features: {e}")
       
+    def prepare_rolling_features(self,
+                                 df: pd.DataFrame,
+                                 features: Optional[List[str]] = None) -> pd.DataFrame:
+        """
+        Prepare rolling features from the DataFrame.
+        """
+        try:
+            for rolling in self.ROLLING_WINDOW_SIZE:
+                df[f'rolling_mean_{rolling}'] = df['ph'].rolling(window=rolling).mean().shift()
+
+            if features is not None:
+                features.extend([f'rolling_mean_{rolling}' for rolling in self.ROLLING_WINDOW_SIZE])
+
+            return df
+        except Exception as e:
+            raise ValueError(f"Error preparing rolling features: {e}")
+
     def prepare_features_with_water_change(self, 
                                        df: pd.DataFrame, 
                                        water_change_df: pd.DataFrame,

@@ -433,6 +433,7 @@ class MLPipeline:
 
             # Prepare features for prediction
             prediction_df = self.features_water_temperature.prepare_features(prediction_df, dropNan=False, fillna=False)
+            prediction_df = self.features_water_temperature.prepare_rolling_features(prediction_df)
             prediction_df = self.features_water_temperature.prepare_feature_with_weather(
                 df=prediction_df,
                 weather_df=forecast.get('forecast', pd.DataFrame()),
@@ -455,6 +456,7 @@ class MLPipeline:
                     prediction = model.predict(X)
                     prediction_df.loc[target_prediction_index, 'water_temperature'] = math.floor(prediction[0] * 100) / 100.0
                     self.features_water_temperature.prepare_lag_features(prediction_df)
+                    self.features_water_temperature.prepare_rolling_features(prediction_df)
                     target_prediction_index += timedelta(hours=1)
                 else:
                     logger.warning(f"No features available for prediction at index {target_prediction_index}. Skipping prediction.")
@@ -556,6 +558,7 @@ class MLPipeline:
                     prediction = model.predict(X)
                     prediction_df.loc[target_prediction_index, 'ph'] = math.floor(prediction[0] * 100) / 100.0
                     self.features_ph.prepare_lag_features(prediction_df)
+                    self.features_ph.prepare_rolling_features(prediction_df)
                     target_prediction_index += timedelta(hours=1)
                 else:
                     logger.warning(f"No features available for prediction at index {target_prediction_index}. Skipping prediction.")

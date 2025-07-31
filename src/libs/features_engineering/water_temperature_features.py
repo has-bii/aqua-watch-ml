@@ -1,13 +1,14 @@
 from src.libs.supabase_manager import SupabaseManager
 from src.libs.forecast import WeatherForecast
 import pandas as pd
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 
 class FeatureEngineeringWaterTemperature:
     # Constants
     # WATER_CHANGE_WINDOW_MINUTES = 15
     # DEFAULT_MINUTES_AFTER_WATER_CHANGE = 1000
     LAG_PERIODS = [1, 2, 3]
+    ROLLING_WINDOW_SIZE = [2, 3, 4]
     
     def __init__(self):
         self.weather_forecast = WeatherForecast()
@@ -39,6 +40,7 @@ class FeatureEngineeringWaterTemperature:
             # Apply feature engineering in sequence
             historical_data = self.prepare_features(historical_data, dropNan=True, features=features)
             historical_data = self.prepare_feature_with_weather(historical_data, forecast_df, forecast.get("sunset_sunrise", pd.DataFrame()), features=features)
+            historical_data = self.prepare_rolling_features(historical_data, features)
             # historical_data = self.prepare_features_with_water_change(historical_data, water_change_data)
 
             return historical_data, features
@@ -179,6 +181,23 @@ class FeatureEngineeringWaterTemperature:
             features.extend([f'lag_{lag}' for lag in self.LAG_PERIODS])
 
         return df
+
+    def prepare_rolling_features(self,
+                                 df: pd.DataFrame,
+                                 features: Optional[List[str]] = None) -> pd.DataFrame:
+        """
+        Prepare rolling features from the DataFrame.
+        """
+        try:
+            for rolling in self.ROLLING_WINDOW_SIZE:
+                df[f'rolling_mean_{rolling}'] = df['ph'].rolling(window=rolling).mean().shift()
+
+            if features is not None:
+                features.extend([f'rolling_mean_{rolling}' for rolling in self.ROLLING_WINDOW_SIZE])
+
+            return df
+        except Exception as e:
+            raise ValueError(f"Error preparing rolling features: {e}")
 
     # def prepare_features_with_water_change(self, 
     #                                        historical_data: pd.DataFrame, 
