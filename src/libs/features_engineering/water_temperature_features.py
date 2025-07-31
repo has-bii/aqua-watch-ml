@@ -190,7 +190,7 @@ class FeatureEngineeringWaterTemperature:
         """
         try:
             for rolling in self.ROLLING_WINDOW_SIZE:
-                df[f'rolling_mean_{rolling}'] = df['ph'].rolling(window=rolling).mean().shift()
+                df[f'rolling_mean_{rolling}'] = df['water_temperature'].rolling(window=rolling).mean().shift()
 
             if features is not None:
                 features.extend([f'rolling_mean_{rolling}' for rolling in self.ROLLING_WINDOW_SIZE])
