@@ -28,12 +28,10 @@ class TaskScheduler:
             schedule.every().hour.at(":05").do(self.schedule_predict_validation)
 
             # # Run model training at 00:00 every day
-            schedule.every().day.at("00:00").do(self.schedule_model_training)
+            schedule.every().hour.at(":50").do(self.schedule_model_training)
 
             if settings.ENVIRONMENT == "development":
                 self.force_run_tasks()
-            else:
-                self.schedule_model_training()
 
             def run_scheduler():
                 while self.running:
