@@ -908,7 +908,9 @@ class MLPipeline:
             hour = target_time.strftime('%H')
             am_pm = 'AM' if int(hour) < 12 else 'PM'
 
-            message = f"Prediction for {aquarium_name} at {hour} {am_pm} for {parameter.replace("_", " ")} was {predicted_value}, but actual value was {actual_value}. Prediction error: {prediction_error:.2f}."
+            parameter_modified = parameter.replace('_',' ').title()
+
+            message = f"Prediction for {aquarium_name} at {hour} {am_pm} for {parameter_modified} was {predicted_value}, but actual value was {actual_value}. Prediction error: {prediction_error:.2f}."
 
             # Insert the validation record into Supabase
             self.supabase.send_alert(
