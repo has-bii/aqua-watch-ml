@@ -247,4 +247,56 @@ class SupabaseManager:
         except Exception as e:
             return False
         
-    
+    def send_alert(
+            self,
+            aquarium_id: str,
+            title: str,
+            message: str,
+            severity: Literal['low', 'medium', 'high', 'critical'],
+            alert_timestamp: Optional[datetime] = None
+    ):
+        """
+        Send an alert for an aquarium
+        Args:
+            aquarium_id: UUID of the aquarium
+            message: Alert message
+            severity: Severity of the alert (low, medium, high, critical)
+        """
+        try:
+            alert_data = {
+                'aquarium_id': aquarium_id,
+                'title': title,
+                'message': message,
+                'severity': severity,
+                'alert_timestamp': alert_timestamp.isoformat() if alert_timestamp else datetime.now(timezone.utc).isoformat()
+            }
+
+            self.supabase.table("alerts").insert(alert_data).execute()
+            logger.info(f"Alert sent for aquarium {aquarium_id}: {title} - {message}")
+                
+        except Exception as e:
+            logger.error(f"Error sending alert: {e}")
+
+    def get_aquarium_data(self,
+                          aquarium_id: str,
+                          columns: list[Literal['name', 'timezone']]):
+        """
+        Get specific data for an aquarium
+        Args:
+            aquarium_id: UUID of the aquarium
+            columns: List of columns to fetch
+        Returns:
+            DataFrame containing the requested columns for the aquarium
+        """
+        try:
+            column_names = ', '.join(columns) if columns else '*'
+
+            response = self.supabase.table("aquarium").select(column_names).eq("id", aquarium_id).single().execute()
+
+            if response.data:
+                return response.data
+            else:
+                return None
+        except Exception as e:
+            logger.error(f"Error fetching aquarium data: {e}")
+            return None

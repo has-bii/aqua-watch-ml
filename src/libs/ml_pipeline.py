@@ -16,6 +16,7 @@ import math
 import numpy as np
 import pandas as pd
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+import pytz
 
 from src.config.settings import settings
 import logging
@@ -157,9 +158,9 @@ class MLPipeline:
             # Calculate prediction error
             predicted['prediction_error'] = np.abs(predicted['predicted_value'] - predicted['actual_value']) 
 
-            # update created_at
-            created_at = datetime.now(timezone.utc).isoformat()
-            predicted['created_at'] = created_at
+            # update validated_at
+            validated_at = datetime.now(timezone.utc).isoformat()
+            predicted['validated_at'] = validated_at
 
             # Reset Index
             predicted.reset_index(inplace=True, drop=False)
@@ -169,6 +170,20 @@ class MLPipeline:
             is_success = self.supabase.validate_prediction(
                 data=predicted.to_dict(orient='records') # type: ignore
             )
+
+            for _, row in predicted.iterrows():
+                # Report the validation
+                prediction_error = row['prediction_error']
+
+                if prediction_error > 0.5:
+                    self.report_prediction_validation(
+                    aquarium_id=aquarium_id,
+                    target_time=datetime.fromisoformat(row['target_time']),
+                    parameter=parameter,
+                    predicted_value=row['predicted_value'],
+                    actual_value=row['actual_value'],
+                    prediction_error=row['prediction_error'],
+                )
 
             if is_success:
                 return True
@@ -856,3 +871,54 @@ class MLPipeline:
                 metadata={"parameter": parameter}
             )
             raise
+
+    def report_prediction_validation(
+            self,
+            aquarium_id: str,
+            target_time: datetime,
+            parameter: Literal['water_temperature', 'ph', 'do'],
+            predicted_value: float,
+            actual_value: float,
+            prediction_error: float
+    ):
+        """
+           Send a report for the prediction validation.
+        """
+        try:
+            # Prepare the data for validation
+            severity = 'low'
+
+            if prediction_error > 2.0:
+                severity = 'high'
+            elif prediction_error > 1.0:
+                severity = 'medium'
+            
+            aquarium_data = self.supabase.get_aquarium_data(aquarium_id, ['name', 'timezone'])
+
+            if aquarium_data is None:
+                raise ValueError(f"Aquarium {aquarium_id} not found or data missing")
+
+            aquarium_name = aquarium_data.get('name', 'Unknown Aquarium')
+
+            # Set timezone to Istanbul
+            aquarium_timezone = pytz.timezone(aquarium_data.get('timezone', 'Europe/Istanbul'))
+            
+            # convert target_time to human-readable format
+            target_time = target_time.astimezone(aquarium_timezone)
+            hour = target_time.strftime('%H')
+            am_pm = 'AM' if int(hour) < 12 else 'PM'
+
+            message = f"Prediction for {aquarium_name} at {hour} {am_pm} for {parameter.replace("_", " ")} was {predicted_value}, but actual value was {actual_value}. Prediction error: {prediction_error:.2f}."
+
+            # Insert the validation record into Supabase
+            self.supabase.send_alert(
+                aquarium_id=aquarium_id,
+                severity=severity,
+                title='Prediction Validation Alert',
+                message=message,
+                alert_timestamp=datetime.now(timezone.utc),
+            )
+
+        except Exception as e:
+            logger.error(f"Error reporting prediction validation for aquarium {aquarium_id} and parameter {parameter}: {e}")
+        
