@@ -22,7 +22,7 @@ class TaskScheduler:
             self.running = True
 
             # Schedule tasks
-            schedule.every().hour.at(":5").do(self.schedule_model_training)
+            schedule.every().hour.at(":05").do(self.schedule_model_training)
 
             schedule.every().hour.at(":10").do(self.schedule_predictions)
 
