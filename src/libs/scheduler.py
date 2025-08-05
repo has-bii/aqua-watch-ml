@@ -22,11 +22,11 @@ class TaskScheduler:
             self.running = True
 
             # Schedule tasks
-            schedule.every().hour.at(":10").do(self.schedule_model_training)
+            schedule.every().hour.at(":5").do(self.schedule_model_training)
 
-            schedule.every().hour.at(":15").do(self.schedule_predictions)
+            schedule.every().hour.at(":10").do(self.schedule_predictions)
 
-            schedule.every().hour.at(":05").do(self.schedule_predict_validation)
+            schedule.every().hour.at(":02").do(self.schedule_predict_validation)
 
             schedule.every().day.at("23:57").do(self.schedule_missing_data)
 
