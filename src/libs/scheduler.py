@@ -30,6 +30,8 @@ class TaskScheduler:
 
             schedule.every().day.at("23:57").do(self.schedule_missing_data)
 
+            schedule.every().day.at("23:58").do(self.schedule_anomaly_detection)
+
             if settings.ENVIRONMENT == "development":
                 self.force_run_tasks()
 
@@ -81,7 +83,9 @@ class TaskScheduler:
                     'task_type': 'anomaly_detection',
                     'aquarium_id': aquarium['id'],
                     'user_id': aquarium['user_id'],
-                    'priority': 200
+                    'priority': 200,
+                    'date_time_start': datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat(),
+                    'date_time_end': datetime.now(timezone.utc).replace(hour=23, minute=59, second=59, microsecond=999999).isoformat()
                 }
                 self.rabbitmq.safe_publish('anomaly_detection', task_data)
             
@@ -142,7 +146,6 @@ class TaskScheduler:
                 task_data = {
                     'task_type': 'missing_data',
                     'aquarium_id': aquarium['id'],
-                    'user_id': aquarium['user_id'],
                     'priority': 250,  # Highest priority,
                     'date_time_start': date_time_start.isoformat(),
                     'date_time_end': date_time_end.isoformat()

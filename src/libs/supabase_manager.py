@@ -104,9 +104,16 @@ class SupabaseManager:
             logger.error(f"Error fetching aquarium geo data: {e}")
             return None
         
-    def get_aquarium_model_settings(self, aquarium_id: str) -> Dict[str, int] | None:
+    def get_aquarium_model_settings(self, 
+                                    aquarium_id: str,
+                                    columns: 
+                                    List[Literal['train_temp_model_days', 'train_ph_model_days', 'prediction_parameters', 'min_temperature', 'max_temperature', 'min_ph', 'max_ph', 'min_do', 'contamination_rate', 'anomaly_parameters']] = 
+                                    ['train_temp_model_days', 'train_ph_model_days', 'prediction_parameters']
+                                    ) -> Dict | None:
         try:
-            response = self.supabase.table("aquarium_settings").select("train_temp_model_days, train_ph_model_days, prediction_parameters").eq("aquarium_id", aquarium_id).single().execute()
+            columns_str = ', '.join(columns)
+
+            response = self.supabase.table("aquarium_settings").select(columns_str).eq("aquarium_id", aquarium_id).single().execute()
 
             return response.data if response.data else None
         except Exception as e:
@@ -342,3 +349,36 @@ class SupabaseManager:
         except Exception as e:
             logger.error(f"Error fetching aquarium data: {e}")
             return None
+        
+    def insert_anomalies(self,
+                         aquarium_id: str,
+                         anomalies: pd.DataFrame):
+        """
+        Insert detected anomalies into the database
+        Args:
+            aquarium_id: UUID of the aquarium
+            anomalies: DataFrame containing anomaly data
+        """
+        try:
+            if anomalies.empty:
+                logger.warning("No anomalies to insert")
+                return
+            
+            # Ensure the DataFrame has the required columns
+            required_columns = ['datetime', 'parameter', 'anomaly_score', 'value', 'reason']
+
+            if not all(col in anomalies.columns for col in required_columns):
+                raise ValueError(f"DataFrame must contain the following columns: {required_columns}, but got {anomalies.columns.tolist()}")
+            
+            # Prepare the data for insertion
+            anomalies['aquarium_id'] = aquarium_id
+            anomalies.rename(columns={'datetime': 'data_datetime'}, inplace=True)
+
+            anomalies['data_datetime'] = anomalies['data_datetime'].apply(lambda x: x.isoformat() if isinstance(x, datetime) else x)
+
+            # Insert the data into the anomalies table
+            self.supabase.table("anomalies").insert(anomalies.to_dict(orient='records')).execute()
+            logger.info(f"Inserted {len(anomalies)} anomalies for aquarium {aquarium_id}")
+        except Exception as e:
+            logger.error(f"Error inserting anomalies: {e}")
+            raise ValueError(f"Error inserting anomalies: {e}")

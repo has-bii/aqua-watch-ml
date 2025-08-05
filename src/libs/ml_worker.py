@@ -115,67 +115,84 @@ class MLWorker:
     def handle_anomaly_detection(self, task: dict):
         """Handle anomaly detection tasks - runs every 30 minutes"""
         aquarium_id = task['aquarium_id']
+        date_time_start = task.get('date_time_start', datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0))
+        date_time_end = task.get('date_time_end', datetime.now(timezone.utc))
         
         try:
-            # # Get recent measurements (last 2 hours for anomaly detection)
-            # df = self.supabase.get_measurements(aquarium_id)
+            logger.info(f"Starting anomaly detection for aquarium {aquarium_id} from {date_time_start.isoformat()} to {date_time_end.isoformat()}")
+
+            # Fetch anomaly settings
+            anomaly_settings = self.supabase.get_aquarium_model_settings(aquarium_id, columns=['anomaly_parameters', 'contamination_rate'])
+
+            if not anomaly_settings:
+                logger.warning(f"No anomaly settings found for aquarium {aquarium_id}. Skipping anomaly detection.")
+                return
             
-            # if df.empty:
-            #     logger.warning(f"No recent measurements for anomaly detection: aquarium {aquarium_id}")
-            #     return
+            parameters = anomaly_settings.get('anomaly_parameters', ['ph', 'do', 'water_temperature'])
+            contamination_rate = anomaly_settings.get('contamination_rate', 0.01)
+
+            # Fetch historical data
+            historical_data = self.supabase.get_historical_data(
+                aquarium_id=aquarium_id,
+                start_date= date_time_start,
+                end_date=date_time_end
+            )
+
+            if historical_data.empty:
+                logger.warning(f"No historical data found for aquarium {aquarium_id} in the specified range. Skipping anomaly detection.")
+                return
             
-            # # Detect anomalies
-            # anomalies = self.ml_pipeline.detect_anomalies(aquarium_id, df)
-            
-            # # Save anomalies and create alerts for high-severity ones
-            # alerts_created = 0
-            # for anomaly in anomalies:
-            #     anomaly_data = {
-            #         'aquarium_id': aquarium_id,
-            #         'parameter_name': anomaly['parameter'],
-            #         'detected_at': anomaly['timestamp'].isoformat(),
-            #         'actual_value': anomaly['actual_value'],
-            #         'anomaly_score': anomaly['anomaly_score'],
-            #         'severity': anomaly['severity'],
-            #         'is_resolved': False
-            #     }
-                
-            #     # Save anomaly
-            #     self.supabase.save_anomaly(anomaly_data)
-                
-            #     # Create alert for medium, high, and critical severity anomalies
-            #     if anomaly['severity'] in ['medium', 'high', 'critical']:
-            #         alert_data = {
-            #             'aquarium_id': aquarium_id,
-            #             'severity': anomaly['severity'],
-            #             'title': f'Anomaly in {anomaly["parameter"].upper()}',
-            #             'message': f'Unusual {anomaly["parameter"]} pattern detected: {anomaly["actual_value"]:.2f} (score: {anomaly["anomaly_score"]:.3f})',
-            #             'alert_timestamp': datetime.now().isoformat(),
-            #             'is_acknowledged': False
-            #         }
-            #         self.supabase.save_alert(alert_data)
-            #         alerts_created += 1
-            
-            # # Log activity
-            # self.supabase.log_ml_activity(
-            #     aquarium_id=aquarium_id,
-            #     activity_type='anomaly_detection',
-            #     status='completed',
-            #     data_points_processed=len(df),
-            #     anomalies_detected=len(anomalies),
-            #     alerts_generated=alerts_created
-            # )
-            
-            # if anomalies:
-            #     logger.info(f"Detected {len(anomalies)} anomalies for aquarium {aquarium_id}")
-            
-            logger.info(f"Anomaly detection task completed for aquarium {aquarium_id}")
+            if len(historical_data) < 280:
+                logger.warning(f"Not enough historical data for aquarium {aquarium_id} to perform anomaly detection. Minimum required is 280 records.")
+                return
+            for param in parameters:
+                historical_data[f"{param}_change"] = historical_data[param].diff().abs()
+                historical_data[f"{param}_rolling_mean"] = historical_data[param].rolling(window=5, center=True).mean()
+                historical_data[f"{param}_rolling_std"] = historical_data[param].rolling(window=5, center=True).std()
+                historical_data[f"{param}_deviation"] = abs(historical_data[param] - historical_data[f"{param}_rolling_mean"])
+
+                # Fill NaN values
+                historical_data[f"{param}_change"].dropna(inplace=True)
+                historical_data.fillna({
+                    f"{param}_rolling_mean": historical_data[param].mean(),
+                    f"{param}_rolling_std": historical_data[param].std(),
+                    f"{param}_deviation": 0
+                }, inplace=True)
+
+            anomalies = pd.DataFrame(columns=['datetime', 'parameter', 'anomaly_score', 'value', 'reason'])
+
+            for param in parameters:
+                if param not in historical_data.columns:
+                    logger.warning(f"Parameter {param} not found in historical data for aquarium {aquarium_id}. Skipping anomaly detection for this parameter.")
+                    continue
+
+                new_anomalies = self.ml_pipeline.detect_anomalies(
+                    raw_data=historical_data,
+                    parameter=param,
+                    contamination=contamination_rate
+                )
+
+                if not new_anomalies.empty:
+                    anomalies = pd.concat([anomalies, new_anomalies], ignore_index=True)
+
+            # Insert anomalies into the database
+            if not anomalies.empty:
+                self.supabase.insert_anomalies(aquarium_id, anomalies)
 
             self.supabase.log_ml_activity(
                 aquarium_id=aquarium_id,
                 activity_type='anomaly_detection',
                 status='completed',
+                metadata={
+                    'parameters': parameters,
+                    'contamination_rate': contamination_rate,
+                    'anomalies_detected': len(anomalies),
+                    'date_time_start': date_time_start.isoformat(),
+                    'date_time_end': date_time_end.isoformat()
+                }
             )
+
+            logger.info(f"Anomaly detection completed for aquarium {aquarium_id}. Detected {len(anomalies)} anomalies.")
 
         except Exception as e:
             logger.error(f"Error in anomaly detection for aquarium {aquarium_id}: {e}")

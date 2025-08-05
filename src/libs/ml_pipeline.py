@@ -17,6 +17,9 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 import pytz
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import IsolationForest
+from scipy import stats
 
 from src.config.settings import settings
 import logging
@@ -985,3 +988,82 @@ class MLPipeline:
         except Exception as e:
             logger.error(f"Error reporting prediction validation for aquarium {aquarium_id} and parameter {parameter}: {e}")
         
+    def detect_anomalies(self, raw_data: pd.DataFrame, parameter: str, contamination: float = 0.01):
+        """
+        Detect anomalies in the data using Isolation Forest.
+        
+        :param data: DataFrame containing the features for anomaly detection.
+        :param feature_columns: List of feature columns to use for anomaly detection.
+        :param contamination: Proportion of outliers in the data.
+        :return: DataFrame with detected anomalies.
+        """
+        data = raw_data.copy()
+
+        if not isinstance(data.index, pd.DatetimeIndex):
+            data['created_at'] = pd.to_datetime(data['created_at'], format='ISO8601')
+            data.set_index('created_at', inplace=True)
+            data = data.sort_index()
+
+        feature_columns = [parameter,f"{parameter}_change", f"{parameter}_deviation"]
+
+        scaler = StandardScaler()
+        features_scaled = scaler.fit_transform(data[feature_columns])
+
+        isolation_forest = IsolationForest(contamination=contamination, random_state=42, n_jobs=-1, n_estimators=100)
+
+        anomaly_labels = isolation_forest.fit_predict(features_scaled)
+        anomaly_scores = isolation_forest.decision_function(features_scaled)
+
+        # Convert anomaly labels to 0 for normal and 1 for anomaly
+        anomaly_labels = np.where(anomaly_labels == -1, 1, 0)
+
+        percentile_ranks = stats.rankdata(anomaly_scores) / len(anomaly_scores) * 100
+        anomaly_percentages = 100 - percentile_ranks
+
+        data['anomaly_score'] = anomaly_percentages
+        data['anomaly_label'] = anomaly_labels
+
+        # Filter anomalies
+        anomalies = data[data['anomaly_label'] == 1]
+
+        # check index type
+        if not isinstance(anomalies.index, pd.DatetimeIndex):
+            anomalies['created_at'] = pd.to_datetime(anomalies['created_at'], format='ISO8601')
+            anomalies.set_index('created_at', inplace=True)
+            
+        # Prepare the final DataFrame
+        anomalies_df = pd.DataFrame(columns=['datetime', 'parameter', 'anomaly_score', 'value', 'reason'])
+
+        mean = data[parameter].mean()
+        std = data[parameter].std()
+        change_std = data[f"{parameter}_change"].std()
+
+        for index, row in anomalies.iterrows():
+            reason = []
+
+            # Check if parameter is an outlier
+            if abs(row[parameter] - mean) > 2 * std:
+                reason.append('outlier')
+
+            # Check if change is large
+            if abs(row[f"{parameter}_change"]) > 2 * change_std:
+                reason.append('Large change')
+
+            # Check if deviation from rolling mean is high
+            if row[f"{parameter}_deviation"] > 2 * data[f"{parameter}_deviation"].std():
+                reason.append('High deviation')
+
+            if not reason:
+                reason.append('Pattern anomaly')
+
+            anomalies_df.loc[len(anomalies_df)] = [
+                index,
+                parameter,
+                row['anomaly_score'],
+                row[parameter],
+                ', '.join(reason)
+            ]
+
+        return anomalies_df
+
+    
