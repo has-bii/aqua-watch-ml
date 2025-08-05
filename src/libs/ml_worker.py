@@ -40,6 +40,8 @@ class MLWorker:
                     self.handle_model_training(task)
                 elif queue_name == 'validate_predictions':
                     self.handle_validate_predictions(task)
+                elif queue_name == 'missing_data':
+                    self.handle_missing_data(task)
                 else:
                     logger.warning(f"Unknown queue type: {queue_name}")
                 
@@ -219,6 +221,29 @@ class MLWorker:
             logger.error(f"Error in model training for aquarium {aquarium_id}: {e}")
             raise
     
+    def handle_missing_data(self, task: dict):
+        """
+        Handle missing data tasks
+        """
+        aquarium_id = task['aquarium_id']
+        date_time_start = task.get('date_time_start', datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0))
+        date_time_end = task.get('date_time_end', datetime.now(timezone.utc))
+
+        try:
+            logger.info(f"Handling missing data for aquarium {aquarium_id} from {date_time_start.isoformat()} to {date_time_end.isoformat()}")
+            
+            self.ml_pipeline.find_missing_data(
+                aquarium_id=aquarium_id,
+                date_time_start=date_time_start,
+                date_time_end=date_time_end
+            )
+
+            logger.info(f"Missing data handled for aquarium {aquarium_id}")
+            
+        except Exception as e:
+            logger.error(f"Error handling missing data for aquarium {aquarium_id}: {e}")
+            raise
+
     def is_prediction_concerning(self, parameter: str, prediction: dict) -> bool:
         """Check if prediction indicates potential problems"""
         concerning_ranges = {

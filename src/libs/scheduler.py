@@ -5,7 +5,7 @@ import schedule
 from src.libs.rabbitmq_manager import RabbitMQManager
 from src.libs.supabase_manager import SupabaseManager
 from src.config.settings import settings
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -21,14 +21,14 @@ class TaskScheduler:
             self.rabbitmq.connect()
             self.running = True
 
-            # # Run predictions at minute 55 of every hour
-            schedule.every().hour.at(":55").do(self.schedule_predictions)
+            # Schedule tasks
+            schedule.every().hour.at(":10").do(self.schedule_model_training)
 
-            # Run validate predictions at minute 05
+            schedule.every().hour.at(":15").do(self.schedule_predictions)
+
             schedule.every().hour.at(":05").do(self.schedule_predict_validation)
 
-            # # Run model training at 00:00 every day
-            schedule.every().hour.at(":50").do(self.schedule_model_training)
+            schedule.every().day.at("23:57").do(self.schedule_missing_data)
 
             if settings.ENVIRONMENT == "development":
                 self.force_run_tasks()
@@ -129,6 +129,30 @@ class TaskScheduler:
             
         except Exception as e:
             logger.error(f"Error scheduling model training: {e}")
+
+    def schedule_missing_data(self):
+        """Schedule missing data task for all active aquariums"""
+        try:
+            aquariums = self.supabase.get_active_aquariums()
+            
+            date_time_end = datetime.now(timezone.utc)
+            date_time_start = date_time_end.replace(hour=0, minute=0, second=0, microsecond=0)
+
+            for aquarium in aquariums:
+                task_data = {
+                    'task_type': 'missing_data',
+                    'aquarium_id': aquarium['id'],
+                    'user_id': aquarium['user_id'],
+                    'priority': 250,  # Highest priority,
+                    'date_time_start': date_time_start.isoformat(),
+                    'date_time_end': date_time_end.isoformat()
+                }
+                self.rabbitmq.safe_publish('missing_data', task_data)
+            
+            logger.info(f"Scheduled missing data task for {len(aquariums)} aquariums")
+            
+        except Exception as e:
+            logger.error(f"Error scheduling missing data task: {e}")
 
     def stop(self):
         """Stop the scheduler"""

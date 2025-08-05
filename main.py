@@ -29,10 +29,11 @@ def create_directories():
 def start_workers():
     """Start ML workers"""
     workers = [
-        ('anomaly_detection', 2),
-        ('predictions', 2),
+        ('anomaly_detection', 1),
+        ('predictions', 1),
         ('validate_predictions', 1),
-        ('model_training', 1)
+        ('model_training', 1),
+        ('missing_data', 1)
     ]
     
     worker_threads = []

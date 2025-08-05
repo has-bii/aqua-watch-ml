@@ -3,7 +3,7 @@ from src.config.settings import settings
 from datetime import datetime, timezone
 import pandas as pd
 import logging
-from typing import Dict, Optional, Literal
+from typing import Dict, Optional, Literal, List
 
 logger = logging.getLogger(__name__)
 
@@ -253,7 +253,8 @@ class SupabaseManager:
             title: str,
             message: str,
             severity: Literal['low', 'medium', 'high', 'critical'],
-            alert_timestamp: Optional[datetime] = None
+            alert_timestamp: Optional[datetime] = None,
+            missing_measurement_id: Optional[int] = None
     ):
         """
         Send an alert for an aquarium
@@ -271,11 +272,52 @@ class SupabaseManager:
                 'alert_timestamp': alert_timestamp.isoformat() if alert_timestamp else datetime.now(timezone.utc).isoformat()
             }
 
+            if missing_measurement_id is not None:
+                alert_data['missing_measurement_id'] = str(missing_measurement_id)
+
             self.supabase.table("alerts").insert(alert_data).execute()
             logger.info(f"Alert sent for aquarium {aquarium_id}: {title} - {message}")
                 
         except Exception as e:
             logger.error(f"Error sending alert: {e}")
+
+    def insert_missing_data(
+            self,
+            data: List[Dict[str, str | float]]
+    ): 
+        """
+        Insert missing data information into the database
+        """
+        try:
+            # Ensure the data contains the required fields
+            required_fields = ['aquarium_id', 'gap_start', 'gap_end', 'duration_minutes']
+
+            for entry in data:
+                if not all(field in entry for field in required_fields):
+                    raise ValueError(f"Each entry must contain the following fields: {required_fields}, but got {entry.keys()}")
+            
+            # Insert the data into the missing_data table
+            response = self.supabase.table("missing_measurements").insert(data).execute()
+            logger.info(f"Inserted missing data: {data}")
+
+            data = response.data
+
+            if not data:
+                raise ValueError("No data inserted, check the input format or database constraints")
+            
+            # Insert alerts for missing data
+            for entry in data:
+                self.send_alert(
+                    aquarium_id=entry['aquarium_id'], # type: ignore
+                    title="Missing Data Alert",
+                    message=f"Missing data detected from gap_start to gap_end for aquarium_name. Duration: {entry['duration_minutes']} minutes.",
+                    severity='high',
+                    missing_measurement_id=entry['id'] # type: ignore
+                )
+
+        except Exception as e:
+            logger.error(f"Error inserting missing data: {e}")
+            raise ValueError(f"Error inserting missing data: {e}")
 
     def get_aquarium_data(self,
                           aquarium_id: str,

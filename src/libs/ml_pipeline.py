@@ -370,7 +370,7 @@ class MLPipeline:
             )
 
             if not isinstance(historical_data.index, pd.DatetimeIndex):
-                historical_data.index = pd.to_datetime(historical_data['created_at'], format='ISO8601') # type: ignore
+                historical_data['created_at'] = pd.to_datetime(historical_data['created_at'], format='ISO8601')
                 historical_data.set_index('created_at', inplace=True)
 
             # Create new DataFrame for prediction
@@ -870,6 +870,67 @@ class MLPipeline:
                 error_message=str(e),
                 metadata={"parameter": parameter}
             )
+            raise
+
+    def find_missing_data(
+            self,
+            aquarium_id: str,
+            date_time_start: datetime,
+            date_time_end: datetime
+    ):
+        """
+        Find missing data for the specified aquarium within the date range.
+        """
+        try:
+            # Fetch historical data
+            historical_data = self.supabase.get_historical_data(
+                aquarium_id=aquarium_id,
+                start_date=date_time_start,
+                end_date=date_time_end
+            )
+
+            if historical_data.empty:
+                logger.warning(f"No historical data found for aquarium {aquarium_id} in the specified date range.")
+                return
+            
+            historical_data['created_at'] = pd.to_datetime(historical_data['created_at'], format='ISO8601')
+            historical_data.set_index('created_at', inplace=True)
+            
+            # Calculate time differences between consecutive measurements
+            time_diffs = historical_data.index.to_series().diff()
+            
+            # Convert to minutes
+            time_diffs_minutes = time_diffs.dt.total_seconds() / 60
+            
+            # Find gaps larger than threshold
+            gaps = time_diffs_minutes > 15
+            
+            # Create gap summary
+            gap_info: List[Dict[str, str | float]] = []
+            for i, is_gap in enumerate(gaps):
+                if is_gap:
+                    gap_start = historical_data.index[i-1]
+                    gap_end = historical_data.index[i]
+                    gap_duration = time_diffs_minutes.iloc[i]
+                    
+                    gap_info.append({
+                        'aquarium_id': aquarium_id,
+                        'gap_start': gap_start.isoformat(),
+                        'gap_end': gap_end.isoformat(),
+                        'duration_minutes': float(gap_duration)
+                    })
+
+            if gap_info:
+                # Insert gap information into Supabase
+                self.supabase.insert_missing_data(
+                    data=gap_info
+                )
+                logger.info(f"Missing data found for aquarium {aquarium_id}. Gaps: {gap_info}")
+            else:
+                logger.info(f"No significant gaps found for aquarium {aquarium_id} in the specified date range.")
+        
+        except Exception as e:
+            logger.error(f"Error fetching historical data for aquarium {aquarium_id}: {e}")
             raise
 
     def report_prediction_validation(
