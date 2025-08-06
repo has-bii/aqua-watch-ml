@@ -115,8 +115,9 @@ class MLWorker:
     def handle_anomaly_detection(self, task: dict):
         """Handle anomaly detection tasks - runs every 30 minutes"""
         aquarium_id = task['aquarium_id']
-        date_time_start = task.get('date_time_start', datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0))
-        date_time_end = task.get('date_time_end', datetime.now(timezone.utc))
+
+        date_time_start = datetime.fromisoformat(task['date_time_start'])
+        date_time_end = datetime.fromisoformat(task['date_time_end'])
         
         try:
             logger.info(f"Starting anomaly detection for aquarium {aquarium_id} from {date_time_start.isoformat()} to {date_time_end.isoformat()}")
@@ -243,8 +244,8 @@ class MLWorker:
         Handle missing data tasks
         """
         aquarium_id = task['aquarium_id']
-        date_time_start = task.get('date_time_start', datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0))
-        date_time_end = task.get('date_time_end', datetime.now(timezone.utc))
+        date_time_start = datetime.fromisoformat(task['date_time_start'])
+        date_time_end = datetime.fromisoformat(task['date_time_end'])
 
         try:
             logger.info(f"Handling missing data for aquarium {aquarium_id} from {date_time_start.isoformat()} to {date_time_end.isoformat()}")
