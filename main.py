@@ -3,64 +3,67 @@ import time
 import logging
 import os
 from datetime import datetime
-from logging.handlers import TimedRotatingFileHandler
+# from logging.handlers import TimedRotatingFileHandler
 from src.libs.scheduler import TaskScheduler
 from src.libs.ml_worker import MLWorker
 from src.config.settings import settings
+from src.libs.date_logger import DateBasedLogger
 
+data_logger = DateBasedLogger(log_path=settings.LOG_PATH)
+data_logger.setup_daily_rotating_logger()
 
-def setup_date_based_logging():
-    """
-    Setup logging with date-based file rotation.
+# def setup_date_based_logging():
+#     """
+#     Setup logging with date-based file rotation.
     
-    This creates log files that rotate daily at midnight.
-    Files will be named: aquarium_ml.log.2025-08-05, aquarium_ml.log.2025-08-06, etc.
-    """
-    # Create logs directory if it doesn't exist
-    os.makedirs(settings.LOG_PATH, exist_ok=True)
+#     This creates log files that rotate daily at midnight.
+#     Files will be named: aquarium_ml.log.2025-08-05, aquarium_ml.log.2025-08-06, etc.
+#     """
+#     # Create logs directory if it doesn't exist
+#     os.makedirs(settings.LOG_PATH, exist_ok=True)
     
-    # Create formatter with more detailed information
-    formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
-    )
+#     # Create formatter with more detailed information
+#     formatter = logging.Formatter(
+#         '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
+#     )
     
-    # Create logger
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
+#     # Create logger
+#     logger = logging.getLogger()
+#     logger.setLevel(logging.INFO)
     
-    # Clear existing handlers to avoid duplicates
-    logger.handlers.clear()
+#     # Clear existing handlers to avoid duplicates
+#     logger.handlers.clear()
     
-    # Create date-based file handler
-    log_filename = os.path.join(settings.LOG_PATH, 'aquarium_ml.log')
-    file_handler = TimedRotatingFileHandler(
-        filename=log_filename,
-        when='midnight',           # Rotate at midnight
-        interval=1,               # Every 1 day
-        backupCount=30,           # Keep 30 days of logs
-        encoding='utf-8'
-    )
-    file_handler.setFormatter(formatter)
-    file_handler.suffix = '%Y-%m-%d'  # Date format: YYYY-MM-DD
+#     # Create date-based file handler
+#     log_filename = os.path.join(settings.LOG_PATH, 'aquarium_ml.log')
+#     file_handler = TimedRotatingFileHandler(
+#         filename=log_filename,
+#         when='midnight',           # Rotate at midnight
+#         interval=1,               # Every 1 day
+#         backupCount=30,           # Keep 30 days of logs
+#         encoding='utf-8'
+#     )
+#     file_handler.setFormatter(formatter)
+#     file_handler.suffix = '%Y-%m-%d'  # Date format: YYYY-MM-DD
     
-    # Create console handler with slightly simpler format
-    console_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(console_formatter)
+#     # Create console handler with slightly simpler format
+#     console_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+#     console_handler = logging.StreamHandler()
+#     console_handler.setFormatter(console_formatter)
     
-    # Add handlers to logger
-    logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
+#     # Add handlers to logger
+#     logger.addHandler(file_handler)
+#     logger.addHandler(console_handler)
     
-    # Log the logging setup
-    logging.info(f"📝 Date-based logging initialized. Log files will be created in: {settings.LOG_PATH}")
-    logging.info(f"📅 Current log file: {log_filename}")
-    logging.info(f"🔄 Log rotation: Daily at midnight, keeping 30 days of history")
+#     # Log the logging setup
+#     logging.info(f"📝 Date-based logging initialized. Log files will be created in: {settings.LOG_PATH}")
+#     logging.info(f"📅 Current log file: {log_filename}")
+#     logging.info(f"🔄 Log rotation: Daily at midnight, keeping 30 days of history")
     
-    return logger
+#     return logger
 
-# Setup date-based logging
-setup_date_based_logging()
+# # Setup date-based logging
+# setup_date_based_logging()
 
 logger = logging.getLogger(__name__)
 
