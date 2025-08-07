@@ -684,7 +684,7 @@ class MLPipeline:
             is_reset_index = True
 
         # Resample to 1-hour intervals
-        full_index = pd.date_range(start=df.index.min(), end=df.index.max(), freq=self.DATA_INTERVAL)
+        full_index = pd.date_range(start=df.index.min().replace(minute=0, second=0, microsecond=0), end=df.index.max(), freq=self.DATA_INTERVAL)
         df = df.reindex(full_index)
         df.index.name = index_name
         df.sort_index(inplace=True)

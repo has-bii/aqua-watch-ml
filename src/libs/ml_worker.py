@@ -202,7 +202,7 @@ class MLWorker:
     def handle_predictions(self, task: dict):
         """Handle prediction tasks"""
         aquarium_id = task['aquarium_id']
-        date_time_now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+        date_time_now = datetime.fromisoformat(task['date_time_now']).replace(minute=0, second=0, microsecond=0)
         
         try:
             parameters = None
