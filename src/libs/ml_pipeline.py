@@ -377,7 +377,7 @@ class MLPipeline:
                 historical_data.set_index('created_at', inplace=True)
 
             # Create new DataFrame for prediction
-            index_range = pd.date_range(start=historical_data.index.min(), end=historical_data.index.max() + timedelta(hours=24), freq='1h')
+            index_range = pd.date_range(start=historical_data.index.min().replace(minute=0, microsecond=0), end=historical_data.index.max() + timedelta(hours=24), freq='1h')
             prediction_df = pd.DataFrame(index=index_range)
             prediction_df.index.name = 'created_at'
             prediction_df.index = pd.to_datetime(prediction_df.index, format='ISO8601')
