@@ -256,7 +256,7 @@ class SupabaseManager:
         
     def send_alert(
             self,
-            aquarium_id: str,
+            user_id: str,
             title: str,
             message: str,
             severity: Literal['low', 'medium', 'high', 'critical'],
@@ -272,7 +272,7 @@ class SupabaseManager:
         """
         try:
             alert_data = {
-                'aquarium_id': aquarium_id,
+                'user_id': user_id,
                 'title': title,
                 'message': message,
                 'severity': severity,
@@ -283,13 +283,14 @@ class SupabaseManager:
                 alert_data['missing_measurement_id'] = str(missing_measurement_id)
 
             self.supabase.table("alerts").insert(alert_data).execute()
-            logger.info(f"Alert sent for aquarium {aquarium_id}: {title} - {message}")
+            logger.info(f"Alert sent for user_id {user_id}: {title} - {message}")
                 
         except Exception as e:
             logger.error(f"Error sending alert: {e}")
 
     def insert_missing_data(
             self,
+            user_id: str,
             data: List[Dict[str, str | float]]
     ): 
         """
@@ -315,7 +316,7 @@ class SupabaseManager:
             # Insert alerts for missing data
             for entry in data:
                 self.send_alert(
-                    aquarium_id=entry['aquarium_id'], # type: ignore
+                    user_id=user_id,  
                     title="Missing Data Alert",
                     message=f"Missing data detected from gap_start to gap_end for aquarium_name. Duration: {entry['duration_minutes']} minutes.",
                     severity='high',
@@ -328,7 +329,7 @@ class SupabaseManager:
 
     def get_aquarium_data(self,
                           aquarium_id: str,
-                          columns: list[Literal['name', 'timezone']]):
+                          columns: list[Literal['name', 'timezone', 'user_id']]):
         """
         Get specific data for an aquarium
         Args:
@@ -365,7 +366,7 @@ class SupabaseManager:
                 return
             
             # Ensure the DataFrame has the required columns
-            required_columns = ['datetime', 'parameter', 'anomaly_score', 'value', 'reason']
+            required_columns = ['datetime', 'parameter', 'anomaly_score', 'value', 'reason', 'severity']
 
             if not all(col in anomalies.columns for col in required_columns):
                 raise ValueError(f"DataFrame must contain the following columns: {required_columns}, but got {anomalies.columns.tolist()}")

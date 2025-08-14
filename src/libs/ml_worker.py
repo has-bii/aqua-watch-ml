@@ -160,7 +160,7 @@ class MLWorker:
                     f"{param}_deviation": 0
                 }, inplace=True)
 
-            anomalies = pd.DataFrame(columns=['datetime', 'parameter', 'anomaly_score', 'value', 'reason'])
+            anomalies = pd.DataFrame(columns=['datetime', 'parameter', 'anomaly_score', 'value', 'reason', 'severity'])
 
             for param in parameters:
                 if param not in historical_data.columns:
@@ -194,6 +194,22 @@ class MLWorker:
             )
 
             logger.info(f"Anomaly detection completed for aquarium {aquarium_id}. Detected {len(anomalies)} anomalies.")
+
+            # Send alerts for detected anomalies
+
+            # Fetch aquarium data
+            aquarium_data = self.supabase.get_aquarium_data(aquarium_id=aquarium_id, columns=['user_id', 'name'])
+
+            if aquarium_data is not None:
+                user_id = aquarium_data['user_id']
+                aquarium_name = aquarium_data['name']
+
+                self.supabase.send_alert(
+                    user_id=user_id,
+                    title=f"Anomaly Detection Alert for {aquarium_name}",
+                    message=f"Anomalies detected in aquarium {aquarium_name} ({aquarium_id}) from {date_time_start.isoformat()} to {date_time_end.isoformat()}.",
+                    severity='high'
+                )
 
         except Exception as e:
             logger.error(f"Error in anomaly detection for aquarium {aquarium_id}: {e}")

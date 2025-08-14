@@ -891,6 +891,9 @@ class MLPipeline:
         Find missing data for the specified aquarium within the date range.
         """
         try:
+            # Fetch aquarium data
+            aquarium_data = self.supabase.get_aquarium_data(aquarium_id, ['name', 'timezone', 'user_id'])
+
             # Fetch historical data
             historical_data = self.supabase.get_historical_data(
                 aquarium_id=aquarium_id,
@@ -932,7 +935,8 @@ class MLPipeline:
             if gap_info:
                 # Insert gap information into Supabase
                 self.supabase.insert_missing_data(
-                    data=gap_info
+                    data=gap_info,
+                    user_id=aquarium_data['user_id'], # type: ignore
                 )
                 logger.info(f"Missing data found for aquarium {aquarium_id}. Gaps: {gap_info}")
             else:
@@ -963,7 +967,7 @@ class MLPipeline:
             elif prediction_error > 1.0:
                 severity = 'medium'
             
-            aquarium_data = self.supabase.get_aquarium_data(aquarium_id, ['name', 'timezone'])
+            aquarium_data = self.supabase.get_aquarium_data(aquarium_id, ['name', 'timezone', 'user_id'])
 
             if aquarium_data is None:
                 raise ValueError(f"Aquarium {aquarium_id} not found or data missing")
@@ -984,7 +988,7 @@ class MLPipeline:
 
             # Insert the validation record into Supabase
             self.supabase.send_alert(
-                aquarium_id=aquarium_id,
+                user_id=aquarium_data['user_id'],
                 severity=severity,
                 title='Prediction Validation Alert',
                 message=message,
@@ -1067,7 +1071,8 @@ class MLPipeline:
                 parameter,
                 row['anomaly_score'],
                 row[parameter],
-                ', '.join(reason)
+                ', '.join(reason),
+                'high' if row['anomaly_score'] > 95 else 'medium' if row['anomaly_score'] > 80 else 'low'
             ]
 
         return anomalies_df
