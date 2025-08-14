@@ -271,8 +271,14 @@ class FeatureEngineeringPH:
         """
         try:
             if column not in data.columns:
-                raise ValueError(f"Column '{column}' not found in DataFrame")
-            
+                raise ValueError(f"Column '{column}' not found in the DataFrame.")
+
+            is_data_reindexed = False
+
+            if not isinstance(data.index, pd.DatetimeIndex):
+                 data = data.set_index('created_at')
+                 is_data_reindexed = True
+
             temp_data = data.copy()
             temp_data = temp_data.dropna()
             temp_data = temp_data[[column]]
@@ -288,12 +294,17 @@ class FeatureEngineeringPH:
             temp_data['is_outlier'] = False
             temp_data.loc[outliers, 'is_outlier'] = True # type: ignore
 
+            print(f"columns after outlier detection: {temp_data.columns}")
+
             temp_data = temp_data.set_index('created_at')
 
             if 'is_outlier' not in data.columns:
                 data['is_outlier'] = False
 
             data.loc[temp_data.index, 'is_outlier'] = temp_data['is_outlier']
+
+            if is_data_reindexed:
+                data = data.reset_index(drop=False, names='created_at')
 
             return data
         except Exception as e:
