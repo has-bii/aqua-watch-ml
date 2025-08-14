@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from src.libs.supabase_manager import SupabaseManager
 from src.libs.rabbitmq_manager import RabbitMQManager
 from src.libs.ml_pipeline import MLPipeline
@@ -135,7 +135,7 @@ class MLWorker:
             # Fetch historical data
             historical_data = self.supabase.get_historical_data(
                 aquarium_id=aquarium_id,
-                start_date= date_time_start,
+                start_date=date_time_start - timedelta(days=7),
                 end_date=date_time_end
             )
 
@@ -174,12 +174,19 @@ class MLWorker:
                 )
 
                 if not new_anomalies.empty:
+                    
+                    # if new anomalies are between date_time_start and date_time_end, add them to the anomalies DataFrame
+                    new_anomalies = new_anomalies[
+                        (new_anomalies['datetime'] >= date_time_start) & 
+                        (new_anomalies['datetime'] <= date_time_end)
+                    ]
                     anomalies = pd.concat([anomalies, new_anomalies], ignore_index=True)
 
             # Insert anomalies into the database
             if not anomalies.empty:
                 self.supabase.insert_anomalies(aquarium_id, anomalies)
 
+            # Log anomaly detection activity
             self.supabase.log_ml_activity(
                 aquarium_id=aquarium_id,
                 activity_type='anomaly_detection',
