@@ -198,16 +198,25 @@ class MLWorker:
             # Send alerts for detected anomalies
 
             # Fetch aquarium data
-            aquarium_data = self.supabase.get_aquarium_data(aquarium_id=aquarium_id, columns=['user_id', 'name'])
+            aquarium_data = self.supabase.get_aquarium_data(aquarium_id=aquarium_id, columns=['user_id', 'name', 'timezone'])
 
             if aquarium_data is not None:
                 user_id = aquarium_data['user_id']
                 aquarium_name = aquarium_data['name']
 
+                # convert date_time_start and date_time_end to the aquarium's timezone
+                aquarium_timezone = aquarium_data['timezone']
+                date_time_start = date_time_start.astimezone(aquarium_timezone)
+                date_time_end = date_time_end.astimezone(aquarium_timezone)
+
+                # Convert date_time to human-readable format
+                date_time_start = date_time_start.strftime('%Y-%m-%d %H:%M:%S')
+                date_time_end = date_time_end.strftime('%Y-%m-%d %H:%M:%S')
+
                 self.supabase.send_alert(
                     user_id=user_id,
                     title=f"Anomaly Detection Alert for {aquarium_name}",
-                    message=f"Anomalies detected in aquarium {aquarium_name} ({aquarium_id}) from {date_time_start.isoformat()} to {date_time_end.isoformat()}.",
+                    message=f"Anomalies detected in aquarium {aquarium_name} from {date_time_start} to {date_time_end}.",
                     severity='high'
                 )
 
