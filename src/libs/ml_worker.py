@@ -5,6 +5,7 @@ from src.libs.rabbitmq_manager import RabbitMQManager
 from src.libs.ml_pipeline import MLPipeline
 import pandas as pd
 from typing import Literal
+import pytz
 import logging
 
 logger = logging.getLogger(__name__)
@@ -212,7 +213,7 @@ class MLWorker:
                 aquarium_name = aquarium_data['name']
 
                 # convert date_time_start and date_time_end to the aquarium's timezone
-                aquarium_timezone = aquarium_data['timezone']
+                aquarium_timezone = pytz.timezone(aquarium_data['timezone'])
                 date_time_start = date_time_start.astimezone(aquarium_timezone)
                 date_time_end = date_time_end.astimezone(aquarium_timezone)
 
