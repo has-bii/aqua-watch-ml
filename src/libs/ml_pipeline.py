@@ -253,16 +253,16 @@ class MLPipeline:
                 raise ValueError(f"Not enough data to train the model. Minimum required samples: {self.MIN_TRAINING_SAMPLES}, available: {len(historical_data)}")
             
             # Fetch water change data
-            # water_change_data = self.supabase.get_water_changing_data(
-            #     aquarium_id,
-            #     start_date=start_date,
-            #     end_date=end_date
-            # )
+            water_change_data = self.supabase.get_water_changing_data(
+                aquarium_id,
+                start_date=start_date,
+                end_date=end_date
+            )
 
             df, features = self.features_water_temperature.prepare_all_features(
                 aquarium_id=aquarium_id,
                 historical_data=historical_data[['water_temperature', 'created_at']].copy(),
-                # water_change_data=water_change_data,
+                water_change_data=water_change_data,
             )
 
             logger.info(f"Features prepared for water temperature model: {features}")
@@ -376,8 +376,11 @@ class MLPipeline:
                 historical_data['created_at'] = pd.to_datetime(historical_data['created_at'], format='ISO8601')
                 historical_data.set_index('created_at', inplace=True)
 
+            # fill missing values in historical data
+            historical_data = historical_data.interpolate(method='linear')
+
             # Create new DataFrame for prediction
-            index_range = pd.date_range(start=historical_data.index.min().replace(minute=0, microsecond=0), end=historical_data.index.max() + timedelta(hours=24), freq='1h')
+            index_range = pd.date_range(start=historical_data.index.min().replace(minute=0, second=0, microsecond=0), end=historical_data.index.max() + timedelta(hours=24), freq='1h')
             prediction_df = pd.DataFrame(index=index_range)
             prediction_df.index.name = 'created_at'
             prediction_df.index = pd.to_datetime(prediction_df.index, format='ISO8601')
@@ -458,10 +461,10 @@ class MLPipeline:
                 sunset_sunrise_df=forecast.get('sunset_sunrise', pd.DataFrame()),
             )
 
-            # prediction_df = self.features_water_temperature.prepare_features_with_water_change(
-            #     prediction_df,
-            #     water_change_data,
-            # )
+            prediction_df = self.features_water_temperature.prepare_features_with_water_change(
+                prediction_df,
+                water_change_data,
+            )
 
             # Predict water temperature
             before_prediction_index: pd.DatetimeIndex = prediction_df.loc[prediction_df['water_temperature'].notna()].index.max()
@@ -684,7 +687,7 @@ class MLPipeline:
             is_reset_index = True
 
         # Resample to 1-hour intervals
-        full_index = pd.date_range(start=df.index.min().replace(minute=0, second=0, microsecond=0), end=df.index.max(), freq=self.DATA_INTERVAL)
+        full_index = pd.date_range(start=df.index.min().replace(minute=0, second=0, microsecond=0), end=df.index.max().replace(minute=0, second=0, microsecond=0), freq=self.DATA_INTERVAL)
         df = df.reindex(full_index)
         df.index.name = index_name
         df.sort_index(inplace=True)
@@ -713,6 +716,9 @@ class MLPipeline:
         """
         try:
             start_time = datetime.now(timezone.utc)
+
+            # Drop rows with NaN values in all features and target
+            df = df.dropna(subset=features + [parameter])
 
             # Split data into training and testing sets
             train_size = int(len(df) * 0.8)
@@ -1065,5 +1071,3 @@ class MLPipeline:
             ]
 
         return anomalies_df
-
-    

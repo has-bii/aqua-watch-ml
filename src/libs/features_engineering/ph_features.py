@@ -1,5 +1,7 @@
 import pandas as pd
 from typing import Optional, Tuple, List
+from scipy import stats
+import numpy as np
 import logging
 
 logger = logging.getLogger(__name__)
@@ -7,12 +9,9 @@ logger = logging.getLogger(__name__)
 class FeatureEngineeringPH:
     LAG_PERIODS = [1, 2, 3]
     
-    WATER_CHANGE_WINDOW_MINUTES = 120
-    AFTER_FEED_WINDOW_MINUTES = 120
-    
-    DEFAULT_MINUTES_AFTER_WATER_CHANGE = 9999
-    DEFAULT_MINUTES_AFTER_FEED = 9999
-    DEFAULT_PERCENTAGE_CHANGED = 0.0
+    WATER_CHANGE_WINDOW_MINUTES = 60
+    DEFAULT_IS_POST_WATER_CHANGE_60MIN = False
+    DEFAULT_IS_POST_AFTER_FEED_60MIN = False
 
     ROLLING_WINDOW_SIZE = [2, 3, 4]
 
@@ -37,11 +36,14 @@ class FeatureEngineeringPH:
 
             # Prepare features related to water changes
             historical_data = self.prepare_features_with_water_change(
-                historical_data, water_change_data, features, index_name='created_at',
+                historical_data, water_change_data, features,
             )
 
             # Prepare feed features with enhanced debugging
             historical_data = self.prepare_feed_features(historical_data, feed_data, features)
+
+            # Prepare outlier detection
+            historical_data = self.detect_outliers(historical_data, 'ph', threshold=2.0)
 
             return historical_data, features
         except Exception as e:
@@ -110,97 +112,68 @@ class FeatureEngineeringPH:
             raise ValueError(f"Error preparing rolling features: {e}")
 
     def prepare_features_with_water_change(self, 
-                                       df: pd.DataFrame, 
-                                       water_change_df: pd.DataFrame,
-                                       features: Optional[List[str]] = None,
-                                       index_name: Optional[str] = 'created_at') -> pd.DataFrame:
-        """
-        Create features related to water changes with support for multiple events.
-        
-        Args:
-            df: Historical data DataFrame with pH measurements
-            water_change_df: DataFrame with water change events
-            index_name: Name of the datetime column/index
-            
-        Returns:
-            DataFrame with added water change features:
-            - minutes_after_water_change: Time elapsed since last water change
-            - diff_water_temp_after_change: Temperature difference after water change
-            - percentage_water_changed: Percentage of water changed
-        """
+                                           historical_data: pd.DataFrame, 
+                                           water_change_df: pd.DataFrame,
+                                           features: Optional[List[str]] = None,
+                                           index_name: Optional[str] = 'created_at'
+                                           ) -> pd.DataFrame:
+        """Create features related to water changes with support for multiple events."""
         try:
-            if water_change_df.empty:
-                # Initialize with default values when no water changes exist
-                df['minutes_after_water_change'] = self.DEFAULT_MINUTES_AFTER_WATER_CHANGE
-                # df['diff_water_temp_after_change'] = 0.0
-                df['percentage_water_changed'] = self.DEFAULT_PERCENTAGE_CHANGED
-                return df
-        
-            # Work with copies to avoid modifying original data
-            df_working = df.copy()
-            water_change_df_working = water_change_df.copy()
+            if features is not None:
+                features.append('is_post_water_change_60min')
+                features.append('diff_water_temp_after_change')
 
-            # Handle index management for historical data
-            hist_was_indexed = isinstance(df_working.index, pd.DatetimeIndex)
-            if hist_was_indexed:
-                df_working.reset_index(inplace=True)
-            
-            # Handle index management for water change data
-            water_was_indexed = isinstance(water_change_df_working.index, pd.DatetimeIndex)
-            if water_was_indexed:
-                water_change_df_working.reset_index(inplace=True)
+            if water_change_df.empty:
+                # If no water changes, initialize with default values
+                historical_data['is_post_water_change_60min'] = self.DEFAULT_IS_POST_WATER_CHANGE_60MIN
+                historical_data['diff_water_temp_after_change'] = 0
+
+                return historical_data
+
+            is_reset_index = False
+
+            # Ensure we have created_at as a column for processing
+            if isinstance(historical_data.index, pd.DatetimeIndex):
+                historical_data.reset_index(inplace=True)
+                historical_data[index_name] = pd.to_datetime(historical_data[index_name], format='ISO8601')
+                is_reset_index = True
             
             # Ensure datetime columns are properly formatted
-            df_working[index_name] = pd.to_datetime(df_working[index_name], format='ISO8601')
-            water_change_df_working['changed_at'] = pd.to_datetime(water_change_df_working['changed_at'], format='ISO8601')
+            historical_data[index_name] = pd.to_datetime(historical_data[index_name], format='ISO8601')
+            water_change_df = water_change_df.reset_index() if isinstance(water_change_df.index, pd.DatetimeIndex) else water_change_df.copy()
+            water_change_df['changed_at'] = pd.to_datetime(water_change_df['changed_at'], format='ISO8601')
 
-            # Initialize all features with default values
-            df_working['minutes_after_water_change'] = self.DEFAULT_MINUTES_AFTER_WATER_CHANGE
-            # df_working['diff_water_temp_after_change'] = 0.0
-            df_working['percentage_water_changed'] = self.DEFAULT_PERCENTAGE_CHANGED
+            # Initialize features with default values
+            historical_data['is_post_water_change_60min'] = self.DEFAULT_IS_POST_WATER_CHANGE_60MIN
+            historical_data['diff_water_temp_after_change'] = 0.0
 
             # Process each water change event
-            for _, water_change in water_change_df_working.iterrows():
+            for _, water_change in water_change_df.iterrows():
                 water_change_time = water_change['changed_at']
-                # water_temp_added = water_change['water_temperature_added']
-                percentage_changed = water_change['percentage_changed']
+                water_temp_added = water_change['water_temperature_added']
                 
-                # Calculate time differences for all records (vectorized operation)
-                time_diffs = (df_working[index_name] - water_change_time).dt.total_seconds() / 60
+                # Calculate time differences for all records (vectorized)
+                time_diffs = (historical_data[index_name] - water_change_time).dt.total_seconds() / 60
                 
                 # Find records within the time window after this water change
                 within_window = (time_diffs >= 0) & (time_diffs <= self.WATER_CHANGE_WINDOW_MINUTES)
                 
                 # Update features for records within the window
                 # Only update if this water change is more recent than previously recorded ones
-                closer_to_change = time_diffs < df_working['minutes_after_water_change']
+                closer_to_change = time_diffs < 60  # Within 60 minutes
                 update_mask = within_window & closer_to_change
                 
                 if update_mask.any():
-                    # Update time since water change
-                    df_working.loc[update_mask, 'minutes_after_water_change'] = time_diffs[update_mask].astype(int)
-                    
-                    # # Update temperature difference feature
-                    # df_working.loc[update_mask, 'diff_water_temp_after_change'] = (
-                    #     df_working.loc[update_mask, 'water_temperature'] - water_temp_added
-                    # )
-                    
-                    # Update percentage changed feature
-                    df_working.loc[update_mask, 'percentage_water_changed'] = percentage_changed
+                    historical_data.loc[update_mask, 'is_post_water_change_60min'] = True
+                    historical_data.loc[update_mask, 'diff_water_temp_after_change'] = (
+                        historical_data.loc[update_mask, 'water_temperature'] - water_temp_added
+                    )
 
-            # Restore the original index structure if needed
-            if hist_was_indexed:
-                df_working.set_index(index_name, inplace=True)
+            # Restore the original index structure
+            if is_reset_index:
+                historical_data.set_index(index_name, inplace=True)
 
-            if features is not None:
-                features.extend([
-                    'minutes_after_water_change',
-                    # 'diff_water_temp_after_change',
-                    'percentage_water_changed'
-                ])
-
-            return df_working
-
+            return historical_data
         except Exception as e:
             raise ValueError(f"Error preparing features with water change data: {e}")
 
@@ -209,26 +182,29 @@ class FeatureEngineeringPH:
                           feed_data: pd.DataFrame,
                           features: Optional[List[str]]) -> pd.DataFrame:
         """
-        Prepare features related to feed data with enhanced time window handling.
+        Prepare features related to feed data with boolean indicator for 60-minute window.
         
         Args:
             historical_data: DataFrame with pH measurements and timestamps
             feed_data: DataFrame with feed events and 'fed_at' timestamps
             
         Returns:
-            DataFrame with added 'minutes_after_feed' feature
+            DataFrame with added 'is_post_after_feed_60min' boolean feature
         """
         try:
             # Work with copies to avoid modifying original data
             df_working = historical_data.copy()
             feed_df_working = feed_data.copy()
 
+            if features is not None:
+                features.append('is_post_after_feed_60min')
+
             feed_was_indexed = isinstance(feed_df_working.index, pd.DatetimeIndex)
             if feed_was_indexed:
                 feed_df_working.reset_index(inplace=True)
 
             if feed_df_working.empty:
-                historical_data['minutes_after_feed'] = self.DEFAULT_MINUTES_AFTER_FEED
+                historical_data['is_post_after_feed_60min'] = self.DEFAULT_IS_POST_AFTER_FEED_60MIN
                 return historical_data
             
             # Handle index and datetime conversion
@@ -254,7 +230,7 @@ class FeatureEngineeringPH:
             overlap = (feed_start <= hist_end) and (hist_start <= feed_end)
             
             # Initialize the feature with default values
-            df_working['minutes_after_feed'] = self.DEFAULT_MINUTES_AFTER_FEED
+            df_working['is_post_after_feed_60min'] = self.DEFAULT_IS_POST_AFTER_FEED_60MIN
             
             if not overlap:
                 # No temporal overlap between datasets
@@ -269,25 +245,56 @@ class FeatureEngineeringPH:
                 # Calculate time differences for all records (vectorized operation)
                 time_diffs = (df_working['created_at'] - feed_time).dt.total_seconds() / 60
                 
-                # Find records within the time window after this feed
-                within_window = (time_diffs >= 0) & (time_diffs <= self.AFTER_FEED_WINDOW_MINUTES)
+                # Find records within 60 minutes after this feed
+                within_window = (time_diffs >= 0) & (time_diffs <= 60)
                 
-                # Update only if this feed event is closer than previously recorded ones
-                closer_to_feed = time_diffs < df_working['minutes_after_feed']
-                update_mask = within_window & closer_to_feed
-                
-                if update_mask.any():
-                    df_working.loc[update_mask, 'minutes_after_feed'] = time_diffs[update_mask].astype(int)
+                # Update the boolean feature for records within the window
+                if within_window.any():
+                    df_working.loc[within_window, 'is_post_after_feed_60min'] = True
             
             # Restore original index structure if needed
             if hist_was_indexed:
                 df_working.set_index('created_at', inplace=True)
-
-            if features is not None:
-                features.append('minutes_after_feed')
             
             return df_working
         
         except Exception as e:
             raise ValueError(f"Error preparing feed features: {e}")
     
+    def detect_outliers(self,
+                        data: pd.DataFrame,
+                        column: str,
+                        threshold: float =  2.0
+                        ) -> pd.DataFrame:
+        """
+        Detect outliers in the specified column of the DataFrame using Z-score method.
+        """
+        try:
+            if column not in data.columns:
+                raise ValueError(f"Column '{column}' not found in DataFrame")
+            
+            temp_data = data.copy()
+            temp_data = temp_data.dropna()
+            temp_data = temp_data[[column]]
+
+            if isinstance(temp_data.index, pd.DatetimeIndex):
+                temp_data = temp_data.reset_index(drop=False, names='created_at')
+        
+            # Calculate Z-scores
+            z_scores = np.abs(stats.zscore(temp_data[column])) # type: ignore
+            outliers = np.where(z_scores > threshold)[0]
+
+            # Mark outliers in the DataFrame
+            temp_data['is_outlier'] = False
+            temp_data.loc[outliers, 'is_outlier'] = True # type: ignore
+
+            temp_data = temp_data.set_index('created_at')
+
+            if 'is_outlier' not in data.columns:
+                data['is_outlier'] = False
+
+            data.loc[temp_data.index, 'is_outlier'] = temp_data['is_outlier']
+
+            return data
+        except Exception as e:
+            raise ValueError(f"Error detecting outliers: {e}")

@@ -2,11 +2,13 @@ from src.libs.supabase_manager import SupabaseManager
 from src.libs.forecast import WeatherForecast
 import pandas as pd
 from typing import Dict, Optional, List
+import numpy as np
+from scipy import stats
 
 class FeatureEngineeringWaterTemperature:
     # Constants
-    # WATER_CHANGE_WINDOW_MINUTES = 15
-    # DEFAULT_MINUTES_AFTER_WATER_CHANGE = 1000
+    WATER_CHANGE_WINDOW_MINUTES = 60
+    DEFAULT_IS_POST_WATER_CHANGE_60MIN = False
     LAG_PERIODS = [1, 2, 3]
     ROLLING_WINDOW_SIZE = [2, 3, 4]
     
@@ -17,6 +19,7 @@ class FeatureEngineeringWaterTemperature:
     def prepare_all_features(self,
                              aquarium_id: str,
                              historical_data: pd.DataFrame,
+                             water_change_data: pd.DataFrame,
                              forecast: Optional[Dict[str, pd.DataFrame]] = None
                              )-> tuple[pd.DataFrame, list[str]]:
         try:
@@ -25,7 +28,7 @@ class FeatureEngineeringWaterTemperature:
                 aquarium_geo = self.supabase.get_aquarium_geo(aquarium_id)
                 if aquarium_geo is None:
                     raise ValueError(f"Aquarium {aquarium_id} not found or geo data missing")
-            
+
                 # Get weather forecast data
                 start_date = historical_data['created_at'].min().strftime('%Y-%m-%d')
                 end_date = historical_data['created_at'].max().strftime('%Y-%m-%d')
@@ -38,10 +41,11 @@ class FeatureEngineeringWaterTemperature:
             features = []
 
             # Apply feature engineering in sequence
-            historical_data = self.prepare_features(historical_data, dropNan=True, features=features)
+            historical_data = self.prepare_features(historical_data, dropNan=False, fillna=False, features=features)
             historical_data = self.prepare_feature_with_weather(historical_data, forecast_df, forecast.get("sunset_sunrise", pd.DataFrame()), features=features)
             historical_data = self.prepare_rolling_features(historical_data, features)
-            # historical_data = self.prepare_features_with_water_change(historical_data, water_change_data)
+            historical_data = self.prepare_features_with_water_change(historical_data, water_change_data, features=features)
+            historical_data = self.detect_outliers(historical_data, 'water_temperature', threshold=2.0)
 
             return historical_data, features
         except Exception as e:
@@ -199,62 +203,106 @@ class FeatureEngineeringWaterTemperature:
         except Exception as e:
             raise ValueError(f"Error preparing rolling features: {e}")
 
-    # def prepare_features_with_water_change(self, 
-    #                                        historical_data: pd.DataFrame, 
-    #                                        water_change_df: pd.DataFrame,
-    #                                        index_name: Optional[str] = 'created_at'
-    #                                        ) -> pd.DataFrame:
-    #     """Create features related to water changes with support for multiple events."""
-    #     try:
-    #         if water_change_df.empty:
-    #             # If no water changes, initialize with default values
-    #             historical_data['minutes_after_water_change'] = self.DEFAULT_MINUTES_AFTER_WATER_CHANGE
-    #             historical_data['diff_water_temp_after_change'] = 0
-    #             return historical_data
+    def prepare_features_with_water_change(self, 
+                                           historical_data: pd.DataFrame, 
+                                           water_change_df: pd.DataFrame,
+                                           features: Optional[List[str]] = None,
+                                           index_name: Optional[str] = 'created_at'
+                                           ) -> pd.DataFrame:
+        """Create features related to water changes with support for multiple events."""
+        try:
+            if features is not None:
+                features.append('is_post_water_change_60min')
+                features.append('diff_water_temp_after_change')
 
-    #         is_reset_index = False
+            if water_change_df.empty:
+                # If no water changes, initialize with default values
+                historical_data['is_post_water_change_60min'] = self.DEFAULT_IS_POST_WATER_CHANGE_60MIN
+                historical_data['diff_water_temp_after_change'] = 0
 
-    #         # Ensure we have created_at as a column for processing
-    #         if isinstance(historical_data.index, pd.DatetimeIndex):
-    #             historical_data.reset_index(inplace=True)
-    #             historical_data[index_name] = pd.to_datetime(historical_data[index_name], format='ISO8601')
-    #             is_reset_index = True
+                return historical_data
+
+            is_reset_index = False
+
+            # Ensure we have created_at as a column for processing
+            if isinstance(historical_data.index, pd.DatetimeIndex):
+                historical_data.reset_index(inplace=True)
+                historical_data[index_name] = pd.to_datetime(historical_data[index_name], format='ISO8601')
+                is_reset_index = True
             
-    #         # Ensure datetime columns are properly formatted
-    #         historical_data[index_name] = pd.to_datetime(historical_data[index_name], format='ISO8601')
-    #         water_change_df = water_change_df.reset_index() if isinstance(water_change_df.index, pd.DatetimeIndex) else water_change_df.copy()
-    #         water_change_df['changed_at'] = pd.to_datetime(water_change_df['changed_at'], format='ISO8601')
+            # Ensure datetime columns are properly formatted
+            historical_data[index_name] = pd.to_datetime(historical_data[index_name], format='ISO8601')
+            water_change_df = water_change_df.reset_index() if isinstance(water_change_df.index, pd.DatetimeIndex) else water_change_df.copy()
+            water_change_df['changed_at'] = pd.to_datetime(water_change_df['changed_at'], format='ISO8601')
 
-    #         # Initialize features with default values
-    #         historical_data['minutes_after_water_change'] = self.DEFAULT_MINUTES_AFTER_WATER_CHANGE
-    #         historical_data['diff_water_temp_after_change'] = 0.0
+            # Initialize features with default values
+            historical_data['is_post_water_change_60min'] = self.DEFAULT_IS_POST_WATER_CHANGE_60MIN
+            historical_data['diff_water_temp_after_change'] = 0.0
 
-    #         # Process each water change event
-    #         for _, water_change in water_change_df.iterrows():
-    #             water_change_time = water_change['changed_at']
-    #             water_temp_added = water_change['water_temperature_added']
+            # Process each water change event
+            for _, water_change in water_change_df.iterrows():
+                water_change_time = water_change['changed_at']
+                water_temp_added = water_change['water_temperature_added']
                 
-    #             # Calculate time differences for all records (vectorized)
-    #             time_diffs = (historical_data[index_name] - water_change_time).dt.total_seconds() / 60
+                # Calculate time differences for all records (vectorized)
+                time_diffs = (historical_data[index_name] - water_change_time).dt.total_seconds() / 60
                 
-    #             # Find records within the time window after this water change
-    #             within_window = (time_diffs >= 0) & (time_diffs <= self.WATER_CHANGE_WINDOW_MINUTES)
+                # Find records within the time window after this water change
+                within_window = (time_diffs >= 0) & (time_diffs <= self.WATER_CHANGE_WINDOW_MINUTES)
                 
-    #             # Update features for records within the window
-    #             # Only update if this water change is more recent than previously recorded ones
-    #             closer_to_change = time_diffs < historical_data['minutes_after_water_change']
-    #             update_mask = within_window & closer_to_change
+                # Update features for records within the window
+                # Only update if this water change is more recent than previously recorded ones
+                closer_to_change = time_diffs < 60  # Within 60 minutes
+                update_mask = within_window & closer_to_change
                 
-    #             if update_mask.any():
-    #                 historical_data.loc[update_mask, 'minutes_after_water_change'] = time_diffs[update_mask].astype(int)
-    #                 historical_data.loc[update_mask, 'diff_water_temp_after_change'] = (
-    #                     historical_data.loc[update_mask, 'water_temperature'] - water_temp_added
-    #                 )
+                if update_mask.any():
+                    historical_data.loc[update_mask, 'is_post_water_change_60min'] = True
+                    historical_data.loc[update_mask, 'diff_water_temp_after_change'] = (
+                        historical_data.loc[update_mask, 'water_temperature'] - water_temp_added
+                    )
 
-    #         # Restore the original index structure
-    #         if is_reset_index:
-    #             historical_data.set_index(index_name, inplace=True)
+            # Restore the original index structure
+            if is_reset_index:
+                historical_data.set_index(index_name, inplace=True)
 
-    #         return historical_data
-    #     except Exception as e:
-    #         raise ValueError(f"Error preparing features with water change data: {e}")
+            return historical_data
+        except Exception as e:
+            raise ValueError(f"Error preparing features with water change data: {e}")
+
+    def detect_outliers(self,
+                        data: pd.DataFrame,
+                        column: str,
+                        threshold: float =  2.0
+                        ) -> pd.DataFrame:
+        """
+        Detect outliers in the specified column of the DataFrame using Z-score method.
+        """
+        try:
+            if column not in data.columns:
+                raise ValueError(f"Column '{column}' not found in DataFrame")
+            
+            temp_data = data.copy()
+            temp_data = temp_data.dropna()
+            temp_data = temp_data[[column]]
+
+            if isinstance(temp_data.index, pd.DatetimeIndex):
+                temp_data = temp_data.reset_index(drop=False, names='created_at')
+        
+            # Calculate Z-scores
+            z_scores = np.abs(stats.zscore(temp_data[column])) # type: ignore
+            outliers = np.where(z_scores > threshold)[0]
+
+            # Mark outliers in the DataFrame
+            temp_data['is_outlier'] = False
+            temp_data.loc[outliers, 'is_outlier'] = True # type: ignore
+
+            temp_data = temp_data.set_index('created_at')
+
+            if 'is_outlier' not in data.columns:
+                data['is_outlier'] = False
+
+            data.loc[temp_data.index, 'is_outlier'] = temp_data['is_outlier']
+
+            return data
+        except Exception as e:
+            raise ValueError(f"Error detecting outliers: {e}")
