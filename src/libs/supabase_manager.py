@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import pandas as pd
 import logging
 from typing import Dict, Optional, Literal, List
+import pytz
 
 logger = logging.getLogger(__name__)
 
@@ -291,7 +292,8 @@ class SupabaseManager:
     def insert_missing_data(
             self,
             user_id: str,
-            data: List[Dict[str, str | float]]
+            data: List[Dict[str, str | float]],
+            timezone: str
     ): 
         """
         Insert missing data information into the database
@@ -315,10 +317,26 @@ class SupabaseManager:
             
             # Insert alerts for missing data
             for entry in data:
+                gap_start = entry['gap_start']
+                gap_end = entry['gap_end']
+
+                # Convert gap_start and gap_end from isoformat string to datetime
+                gap_start = datetime.fromisoformat(gap_start) # type: ignore
+                gap_end = datetime.fromisoformat(gap_end) # type: ignore
+
+                # Convert gap_start and gap_end to timezone-aware datetime
+                aquarium_timezone = pytz.timezone(timezone) # type: ignore
+                gap_start = gap_start.astimezone(aquarium_timezone)
+                gap_end = gap_end.astimezone(aquarium_timezone)
+
+                # Convert gap_start and gap_end to human-readable format (dd-mm-yyyy HH:MM)
+                gap_start = gap_start.strftime('%d-%m-%Y %H:%M')
+                gap_end = gap_end.strftime('%d-%m-%Y %H:%M')
+
                 self.send_alert(
                     user_id=user_id,  
                     title="Missing Data Alert",
-                    message=f"Missing data detected from gap_start to gap_end for aquarium_name. Duration: {entry['duration_minutes']} minutes.",
+                    message=f"Missing data detected from {gap_start} to {gap_end} for aquarium_name. With duration {entry['duration_minutes']} minutes.",
                     severity='high',
                     missing_measurement_id=entry['id'] # type: ignore
                 )
