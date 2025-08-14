@@ -518,7 +518,7 @@ class MLPipeline:
                 parameter='water_temperature',
                 model_version=model_metadata['training_info']['model_version'],
                 data=insertion_data,
-                exclude_columns=['do', 'ph','is_prediction']
+                exclude_columns=['do', 'ph','is_prediction', 'is_outlier']
             )
 
             # Remove unnecessary columns
@@ -620,7 +620,7 @@ class MLPipeline:
                 parameter='ph',
                 model_version=model_metadata['training_info']['model_version'],
                 data=insertion_data,
-                exclude_columns=['do', 'water_temperature','is_prediction']
+                exclude_columns=['do', 'water_temperature','is_prediction', 'is_outlier']
             )
 
             # Remove unnecessary columns

@@ -163,7 +163,7 @@ class SupabaseManager:
             self,
             aquarium_id: str,
             parameter: Literal['water_temperature', 'ph'],
-            exclude_columns: list[Literal['is_prediction', 'ph', 'do', 'water_temperature']],
+            exclude_columns: list[Literal['is_prediction', 'ph', 'do', 'water_temperature', 'is_outlier']],
             data: pd.DataFrame,
             model_version: str
         ):
