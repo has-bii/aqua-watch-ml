@@ -293,7 +293,8 @@ class SupabaseManager:
             self,
             user_id: str,
             data: List[Dict[str, str | float]],
-            timezone: str
+            timezone: str,
+            aquarium_name: str
     ): 
         """
         Insert missing data information into the database
@@ -336,7 +337,7 @@ class SupabaseManager:
                 self.send_alert(
                     user_id=user_id,  
                     title="Missing Data Alert",
-                    message=f"Missing data detected from {gap_start} to {gap_end} for aquarium_name. With duration {entry['duration_minutes']} minutes.",
+                    message=f"Missing data detected from {gap_start} to {gap_end} for {aquarium_name}. With duration {entry['duration_minutes']} minutes.",
                     severity='high',
                     missing_measurement_id=entry['id'] # type: ignore
                 )

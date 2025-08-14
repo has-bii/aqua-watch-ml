@@ -937,7 +937,8 @@ class MLPipeline:
                 self.supabase.insert_missing_data(
                     data=gap_info,
                     user_id=aquarium_data['user_id'], # type: ignore
-                    timezone=aquarium_data['timezone'] # type: ignore
+                    timezone=aquarium_data['timezone'], # type: ignore
+                    aquarium_name=aquarium_data['name'] # type: ignore
                 )
                 logger.info(f"Missing data found for aquarium {aquarium_id}. Gaps: {gap_info}")
             else:
