@@ -1044,7 +1044,7 @@ class MLPipeline:
             anomalies.set_index('created_at', inplace=True)
             
         # Prepare the final DataFrame
-        anomalies_df = pd.DataFrame(columns=['datetime', 'parameter', 'anomaly_score', 'value', 'reason'])
+        anomalies_df = pd.DataFrame(columns=['datetime', 'parameter', 'anomaly_score', 'value', 'reason', 'severity'])
 
         mean = data[parameter].mean()
         std = data[parameter].std()
