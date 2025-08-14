@@ -144,7 +144,7 @@ class MLWorker:
                 return
             
             if len(historical_data) < 280:
-                logger.warning(f"Not enough historical data for aquarium {aquarium_id} to perform anomaly detection. Minimum required is 280 records.")
+                logger.warning(f"Not enough historical data for aquarium {aquarium_id} to perform anomaly detection. Minimum required is 280 records. {len(historical_data)} records found.")
                 return
             for param in parameters:
                 historical_data[f"{param}_change"] = historical_data[param].diff().abs()
