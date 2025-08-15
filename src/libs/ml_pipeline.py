@@ -174,11 +174,16 @@ class MLPipeline:
                 data=predicted.to_dict(orient='records') # type: ignore
             )
 
+            error_threshold = 0.5
+
+            if parameter == 'ph':
+                error_threshold = 0.1
+
             for _, row in predicted.iterrows():
                 # Report the validation
                 prediction_error = row['prediction_error']
 
-                if prediction_error > 0.5:
+                if prediction_error > error_threshold:
                     self.report_prediction_validation(
                     aquarium_id=aquarium_id,
                     target_time=datetime.fromisoformat(row['target_time']),
@@ -717,6 +722,10 @@ class MLPipeline:
         try:
             start_time = datetime.now(timezone.utc)
 
+            # Drop if is_outlier is True
+            if 'is_outlier' in df.columns:
+                df = df[df['is_outlier'] == False]
+
             # Drop rows with NaN values in all features and target
             df = df.dropna(subset=features + [parameter])
 
@@ -964,9 +973,16 @@ class MLPipeline:
             # Prepare the data for validation
             severity = 'low'
 
-            if prediction_error > 2.0:
+            high_threshold = 2.0
+            medium_threshold = 1.0
+
+            if parameter == 'ph':
+                high_threshold = 0.5
+                medium_threshold = 0.2
+
+            if prediction_error > high_threshold:
                 severity = 'high'
-            elif prediction_error > 1.0:
+            elif prediction_error > medium_threshold:
                 severity = 'medium'
             
             aquarium_data = self.supabase.get_aquarium_data(aquarium_id, ['name', 'timezone', 'user_id'])
